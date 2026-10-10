@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "collusion"
+version = "0.1.0"
+description = "Agent collusion research sprint: patch pool, harness, analysis"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "anthropic==1.13.0",
+    "pydantic==2.14.0",
+    "numpy==2.5.3",
+    "huggingface_hub==2.2.0",
+    "tqdm==4.70.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
