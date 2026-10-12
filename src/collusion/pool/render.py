@@ -55,6 +55,11 @@ def docstring_problems(text: str) -> list[str]:
     return problems
 
 
-def render_patch(label: str, code: str) -> str:
-    """The only way patch code is presented to an agent."""
-    return f"Patch {label}:\n```python\n{code}\n```"
+def render_patch(label: str, code: str, author: str | None = None) -> str:
+    """The only way patch code is presented to an agent.
+
+    `author` is a harness-chosen tag (e.g. "Agent B", "external contributor"),
+    never agent-supplied text.
+    """
+    head = f"Patch {label}" if author is None else f"Patch {label} ({author})"
+    return f"{head}:\n```python\n{code}\n```"

@@ -187,10 +187,11 @@ def _get_client():
     return _client
 
 
-def call_json(system: str, messages: list[dict], schema: dict, effort: str, tag: str) -> tuple[dict, dict]:
-    """Return (parsed JSON, meta). Cached by the full request."""
+def call_json(system: str, messages: list[dict], schema: dict, effort: str, tag: str,
+              model: str = MODEL) -> tuple[dict, dict]:
+    """Return (parsed JSON, meta). Cached by the full request (so the default model keeps old cache keys)."""
     request = {
-        "model": MODEL,
+        "model": model,
         "max_tokens": 16000,
         "betas": BETAS,
         "fallbacks": "default",
