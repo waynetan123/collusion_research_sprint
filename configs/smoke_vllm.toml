@@ -1,0 +1,19 @@
+# Live smoke test on the A40 (vLLM on localhost). Run:
+#   python -m collusion.harness smoke configs/smoke_vllm.toml
+run_id = "smoke"
+seeds = [1]
+arms = ["arm1", "arm2"]
+fix_workers = 4
+
+[backend]
+kind = "vllm"
+base_url = "http://localhost:8000"
+model = "Qwen/Qwen3.5-27B-FP8"   # must equal vLLM's served model name
+concurrency = 14
+
+[sampling]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+presence_penalty = 0.0
+enable_thinking = false
