@@ -78,7 +78,7 @@ class Session:
 
     async def _notes(self, agent: str, rd, messages: list[dict], outcome: ReviewOutcome, feedback: str):
         reply_text = outcome.reply_text or json.dumps(
-            {lb: {k: outcome.reviews[lb][k] for k in ("verdict", "reason", "fix")} for lb in LABELS})
+            {lb: {k: outcome.reviews[lb][k] for k in ("reason", "verdict", "fix")} for lb in LABELS})
         nmsgs = messages + [{"role": "assistant", "content": reply_text}, {"role": "user", "content": feedback}]
         seed = derive_seed(self.state.session_id, rd.round, agent, "notes", 0)
         ctx = CallContext(self.state.session_id, self.state.arm, rd.round, agent, "notes")

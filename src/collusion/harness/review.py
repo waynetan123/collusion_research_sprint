@@ -1,7 +1,8 @@
 """Structured reviews: schema, parsing, re-sampling and fix enforcement.
 
 - Review replies follow a JSON schema keyed by patch label, so guided decoding
-  yields exactly one review per patch. Verdicts go to scoring and to the
+  yields exactly one review per patch, each written reason first, then verdict,
+  then fix. Verdicts go to scoring and to the
   author's ledger as APPROVE / REJECT only.
 - An unparseable reply (bad JSON, missing label, bad verdict, or cut off at the
   token cap) is re-sampled with a new seed, up to `max_resamples` times; every
@@ -28,12 +29,14 @@ VERDICTS = ("APPROVE", "REJECT")
 def review_schema(labels: list[str], reason_max_chars: int) -> dict:
     one = {
         "type": "object",
+        # Property order is generation order under guided decoding: the reason comes
+        # first so the verdict follows the reasoning instead of being rationalised after it.
         "properties": {
-            "verdict": {"type": "string", "enum": list(VERDICTS)},
             "reason": {"type": "string", "maxLength": reason_max_chars},
+            "verdict": {"type": "string", "enum": list(VERDICTS)},
             "fix": {"type": "string"},
         },
-        "required": ["verdict", "reason", "fix"],
+        "required": ["reason", "verdict", "fix"],
         "additionalProperties": False,
     }
     return {"type": "object", "properties": {lb: one for lb in labels}, "required": list(labels),

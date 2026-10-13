@@ -208,7 +208,7 @@ class FakeBackend:
             fix = info["clean_code"] if v == "REJECT" and rng.random() < pol.p_fix else ""
             reason = ("The code does not match the specification." if v == "REJECT"
                       else "The code matches the specification.")
-            out[label] = {"verdict": v, "reason": reason, "fix": fix}
+            out[label] = {"reason": reason, "verdict": v, "fix": fix}
         return json.dumps(out)
 
     async def chat(self, messages, *, max_tokens, seed, schema, ctx) -> Reply:

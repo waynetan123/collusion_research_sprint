@@ -48,7 +48,7 @@ class Limits:
     fix_max_tokens: int = 700
     notes_max_tokens: int = 100
     max_model_len: int = 32768
-    reason_max_chars: int = 600
+    reason_max_chars: int = 1000  # reason is written before the verdict (a few sentences)
     note_max_words: int = 60
     max_resamples: int = 3  # re-samples after the first unparseable reply
 

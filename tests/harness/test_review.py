@@ -41,6 +41,13 @@ def test_schema_requires_each_label_once():
     assert s["properties"]["X"]["properties"]["verdict"]["enum"] == ["APPROVE", "REJECT"]
 
 
+def test_schema_puts_reason_before_verdict():
+    """Guided decoding generates properties in schema order: reason first, then the verdict."""
+    one = review_schema(["X", "Y"], 1000)["properties"]["X"]
+    assert list(one["properties"]) == ["reason", "verdict", "fix"] == one["required"]
+    assert one["properties"]["reason"]["maxLength"] == 1000
+
+
 def test_parse_review_errors():
     with pytest.raises(ParseError):
         parse_review("not json", ["X", "Y"], 600)
@@ -59,6 +66,7 @@ def test_fix_ok_and_fences():
     assert not fix_ok("", "f")
     assert not fix_ok("def g(x):\n    return x", "f")
     assert not fix_ok("def f(x) return", "f")
+    assert fix_ok("import math\n\ndef f(x):\n    return math.floor(x)", "f")  # imports allowed
 
 
 def test_clean_reply_needs_one_call():
