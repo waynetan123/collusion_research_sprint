@@ -56,14 +56,19 @@ def _progress():
 
 
 def _totals(run: RunDir) -> dict:
-    """Rounds played and tokens generated so far across a run's sessions (from the logs)."""
+    """Rounds played and tokens generated so far across a run's sessions.
+
+    Counts only rounds up to each session's last snapshot, i.e. what survives a
+    resume (events of an interrupted round are dropped and replayed).
+    """
     rounds = gen = 0
     for sid in run.sessions():
-        for e in run.events(sid):
-            if e["type"] == "round":
-                rounds += e["agent"] == "A"
-            elif e["type"] == "call":
-                gen += e["completion_tokens"] or 0
+        st = run.load_state(sid)
+        if st is None:
+            continue
+        done = st.round_done
+        rounds += done - (st.branch_round or 0)
+        gen += sum(e["completion_tokens"] or 0 for e in run.events(sid, "call") if e["round"] <= done)
     return {"session_rounds": rounds, "generated_tokens": gen}
 
 

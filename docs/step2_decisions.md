@@ -1,6 +1,6 @@
 # Step 2: Build the harness (decisions log)
 
-Status: **Built; 107/107 tests pass. Live smoke tests on the A40 passed (§13a, §13b).** Prompts revised to v2, then v3, after the smoke tests (§6a; user-approved 2026-10-12). **Next: throughput check (§13c). Full prompt wording is still marked draft until the user signs off (§6).**
+Status: **Built; 108/108 tests pass. Live smoke tests on the A40 passed (§13a, §13b).** Prompts revised to v2, then v3, after the smoke tests (§6a; user-approved 2026-10-12). **Next: throughput check (§13c). Full prompt wording is still marked draft until the user signs off (§6).**
 
 ## 1. Goal and outputs
 
@@ -308,6 +308,23 @@ python -m collusion.harness run configs/throughput_vllm.toml
 ```
 
 Planning arithmetic from the result: the pilot needs about 2,000–2,800 session-rounds (doc estimate), so wall time ≈ session-rounds ÷ (session-rounds per minute). One 111-round session can't run faster than ~22 s per round, about 40 min, however much batching helps.
+
+**First attempt (user, 2026-10-12): a stall, then a clean resume.**
+- Seeds 1–5 finished their 5 rounds in 4 min 26 s to 6 min 31 s (53–78 s per round per session, against ~22 s for a single pair). Seed 6 stopped after round 3, and the run waited indefinitely.
+- **Cause: the vLLM server, not the harness.** The user reports that restarting the vLLM server fixed it.
+  - The server process was still up: a dead server refuses connections, and the harness would have crashed within ~30 s of retries rather than waiting.
+  - So vLLM was alive but not completing at least one request: a stalled engine.
+  - Prime suspect: the experimental `--mamba-cache-mode align` prefix caching, under its first load of 16 concurrent sequences (smoke tests had ≤4). Not confirmed, because no vLLM status or log was captured during the stall.
+  - Next occurrence: capture the vLLM log and metrics first. If it recurs, compare stability and throughput without `--enable-prefix-caching --mamba-cache-mode align`.
+- After Ctrl-C, re-running the same command resumed seed 6 from its round-3 snapshot and finished in 37 s. **Crash recovery works on the live server.**
+- **Rough throughput from the progress bars:** ~56 session-rounds in ~6.5 min, about **8–9 session-rounds/min**. Batching gave about 3× the throughput of a single pair, not 12×. At that rate the pilot's 2,000–2,800 session-rounds take ~4–5.5 GPU-hours, inside the doc's 4–8 h. The figure is rough; a clean run is still to do.
+
+**Changes after the stall:**
+- `backend.timeout_s` lowered from 600 to **300 s** per request; `max_http_retries` from 5 to **3**.
+- Every retry now prints a warning (`warning: vLLM … failed …; retry k/3 in N s`), so a stalled server is visible instead of a silent freeze. Worst case before a crash is now about 20 min (it was about 60).
+- The throughput line counts only rounds up to each session's last snapshot, so a resumed run reports just the rounds it actually played. The first attempt's resumed figure ("2 session-rounds in 37 s") under-counted.
+- **If a stall recurs**, capture vLLM's status line before stopping anything (`curl -s localhost:8000/metrics | grep -E "^vllm:(num_requests_running|num_requests_waiting|kv_cache_usage_perc)"`). If vLLM shows requests running with zero generation, retry without `--enable-prefix-caching --mamba-cache-mode align`.
+- **Note:** changing these defaults changes the config hash, so delete old run folders (`smoke-smoke`, `throughput`) before re-running.
 
 ## 14. Open items for later steps
 

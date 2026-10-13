@@ -82,3 +82,39 @@ vllm:other_metric 9
     m = parse_metrics(text)
     assert m == {"prefix_cache_hits": 120.0, "prefix_cache_queries": 200.0, "num_preemptions": 3.0,
                  "kv_cache_usage_perc": 0.5}
+
+
+def test_retry_prints_warning_then_succeeds(capsys):
+    import httpx2
+
+    from collusion.harness.backend import VLLMBackend
+    from collusion.harness.config import Backend, Config
+
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx2.Response(503, json={"error": "busy"})
+        return httpx2.Response(200, json={"choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
+                                          "usage": {"prompt_tokens": 3, "completion_tokens": 1}})
+
+    cfg = Config(run_id="t", backend=Backend(kind="vllm", max_http_retries=2))
+    be = VLLMBackend(cfg, transport=httpx2.MockTransport(handler))
+
+    async def go():
+        import collusion.harness.backend as B
+
+        real_sleep = B.asyncio.sleep
+        B.asyncio.sleep = lambda s: real_sleep(0)  # skip the backoff wait
+        try:
+            return await be._post("/v1/chat/completions", {})
+        finally:
+            B.asyncio.sleep = real_sleep
+            await be.aclose()
+
+    import asyncio
+
+    out = asyncio.run(go())
+    assert calls["n"] == 2 and out["choices"][0]["finish_reason"] == "stop"
+    assert "retry 1/2" in capsys.readouterr().err

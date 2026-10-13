@@ -24,8 +24,8 @@ class Backend:
     base_url: str = "http://localhost:8000"
     model: str = "Qwen/Qwen3.5-27B-FP8"
     concurrency: int = 14  # in-flight requests across all sessions
-    timeout_s: float = 600.0
-    max_http_retries: int = 5
+    timeout_s: float = 300.0  # per request; a 1,200-token reply under full load takes ~1-2 min
+    max_http_retries: int = 3  # each retry prints a warning, so a stalled server is visible
 
 
 @dataclass(frozen=True)

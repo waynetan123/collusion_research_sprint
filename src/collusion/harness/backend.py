@@ -16,6 +16,7 @@ import asyncio
 import json
 import random
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -102,7 +103,12 @@ class VLLMBackend:
                 retryable = isinstance(e, h.TransportError) or status in (429, 500, 502, 503, 504)
                 if not retryable or attempt == self.cfg.backend.max_http_retries:
                     raise
-                await asyncio.sleep(min(60.0, 2.0**attempt))
+                delay = min(60.0, 2.0**attempt)
+                from tqdm import tqdm
+
+                tqdm.write(f"warning: vLLM {path} failed ({type(e).__name__}: {str(e)[:120]}); "
+                           f"retry {attempt + 1}/{self.cfg.backend.max_http_retries} in {delay:.0f} s", file=sys.stderr)
+                await asyncio.sleep(delay)
         raise AssertionError("unreachable")
 
     async def chat(self, messages, *, max_tokens, seed, schema, ctx) -> Reply:
