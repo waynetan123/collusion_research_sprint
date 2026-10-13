@@ -37,7 +37,17 @@ def test_openrouter_backend_validation():
             C.from_dict({"run_id": "x", "backend": bad})
 
 
-def test_spend_cap_is_not_hashed():
-    a = C.from_dict({"run_id": "x", "backend": {"max_cost_usd": 1.0}})
-    b = C.from_dict({"run_id": "x", "backend": {"max_cost_usd": 2.5}})
-    assert a.hash == b.hash != C.from_dict({"run_id": "x", "backend": {"max_http_retries": 6}}).hash
+def test_operational_settings_are_not_hashed():
+    base = C.from_dict({"run_id": "x"})
+    same = C.from_dict({"run_id": "x", "fix_workers": 9, "backend": {
+        "max_cost_usd": 2.5, "concurrency": 48, "timeout_s": 60.0, "max_http_retries": 6}})
+    assert base.hash == same.hash
+    assert base.hash != C.from_dict({"run_id": "x", "backend": {"model": "other"}}).hash
+
+
+def test_prompt_text_is_hashed(monkeypatch, tmp_path):
+    base = C.from_dict({"run_id": "x"}).hash  # `hash` is a property: take it before the swap
+    edited = tmp_path / "prompts.py"
+    edited.write_bytes(C.PROMPTS_FILE.read_bytes() + b"# edit\n")
+    monkeypatch.setattr(C, "PROMPTS_FILE", edited)
+    assert C.from_dict({"run_id": "x"}).hash != base
