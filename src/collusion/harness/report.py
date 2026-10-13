@@ -3,7 +3,8 @@
 `summarize` computes, per session, the quantities the pilot checks: miss rates
 (partner, stranger, gap), false rejections, harm, scores, the structured-output
 failure rate, fix re-prompt / fix_missing rates, fix pass rates, notes
-truncation, tokens per round and prefix-cache share. For arm 2 sessions it adds
+truncation, tokens per round, prefix-cache share and (OpenRouter) cost,
+reasoning tokens and serving providers. For arm 2 sessions it adds
 the excess partner miss rate against the matched arm 1 session.
 
 `verify` re-renders every logged review prompt from the snapshots and checks
@@ -74,9 +75,17 @@ def summarize_session(run: RunDir, sid: str) -> dict:
         "completion_tokens_per_round": round(sum(c["completion_tokens"] for c in calls) / n_rounds) if n_rounds else None,
         "max_review_completion_tokens": max((c["completion_tokens"] for c in review_calls), default=None),
         "cached_token_share": _rate(sum(c["cached_tokens"] for c in cached), sum(c["prompt_tokens"] for c in cached)),
+        "cost_usd": round(sum(c.get("cost") or 0.0 for c in calls), 6),
+        "reasoning_tokens": sum(c.get("reasoning_tokens") or 0 for c in calls),
+        "providers": sorted({c["provider"] for c in calls if c.get("provider")}),
         "detector": [e for e in run.events(sid, "detector") if e["event"] != "window"],
     }
     return out
+
+
+def run_cost(run: RunDir) -> float:
+    """USD logged across every call of a run (OpenRouter `usage.cost`; 0 for other backends)."""
+    return sum(e.get("cost") or 0.0 for sid in run.sessions() for e in run.events(sid, "call"))
 
 
 def matched_excess(run: RunDir, sid2: str, sid1: str) -> dict:

@@ -107,6 +107,19 @@ def prompt_sha(messages: list[dict]) -> str:
     return hashlib.sha256(json.dumps(messages, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+def reply_event_fields(r: Reply) -> dict:
+    """Per-call fields of a `call` event. OpenRouter extras are added only when reported,
+    so vLLM and fake-backend events are unchanged."""
+    out = {"prompt_tokens": r.prompt_tokens, "completion_tokens": r.completion_tokens,
+           "cached_tokens": r.cached_tokens, "finish_reason": r.finish_reason, "latency": round(r.latency, 3),
+           "text": r.text}
+    for k in ("reasoning", "cost", "reasoning_tokens", "provider"):
+        v = getattr(r, k)
+        if v is not None and v != "":
+            out[k] = v
+    return out
+
+
 @dataclass
 class CallLog:
     kind: str
@@ -118,12 +131,8 @@ class CallLog:
     error: str | None = None
 
     def as_event(self) -> dict:
-        r = self.reply
         return {"kind": self.kind, "attempt": self.attempt, "seed": self.seed, "prompt_sha256": self.prompt_sha256,
-                "prompt_tokens": r.prompt_tokens, "completion_tokens": r.completion_tokens,
-                "cached_tokens": r.cached_tokens, "finish_reason": r.finish_reason, "latency": round(r.latency, 3),
-                "ok": self.ok, "error": self.error, "text": r.text,
-                **({"reasoning": r.reasoning} if r.reasoning else {})}
+                "ok": self.ok, "error": self.error, **reply_event_fields(self.reply)}
 
 
 @dataclass

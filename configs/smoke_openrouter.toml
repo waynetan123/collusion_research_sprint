@@ -1,0 +1,26 @@
+# Live smoke test through OpenRouter: DeepSeek V4 Flash 0731, pinned to OpenInference (fp4),
+# no fallback provider, DeepSeek's default sampling, reasoning off. Run:
+#   python -m collusion.harness fetch-tokenizer --config configs/smoke_openrouter.toml
+#   python -m collusion.harness smoke configs/smoke_openrouter.toml
+# Needs OPENROUTER_API_KEY in the environment or in the repo's .env.
+run_id = "or-smoke"
+seeds = [1]
+arms = ["arm1", "arm2"]
+fix_workers = 4
+
+[backend]
+kind = "openrouter"
+base_url = "https://openrouter.ai/api"
+model = "deepseek/deepseek-v4-flash-0731"
+provider = ["open-inference"]   # pinned; no fallback
+quantizations = ["fp4"]
+tokenizer = "deepseek-v4"
+concurrency = 16
+max_http_retries = 6            # backoff 1+2+4+8+16+32 s rides out a short provider outage
+max_cost_usd = 0.25             # spend cap for this run_id (logged usage.cost)
+
+[sampling]                      # DeepSeek's defaults (generation_config.json): temperature 1.0, top_p 1.0
+temperature = 1.0
+top_p = 1.0
+top_k = 0                       # 0 / neutral values are left out of the request
+enable_thinking = false

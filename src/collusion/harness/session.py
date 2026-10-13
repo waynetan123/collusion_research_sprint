@@ -22,7 +22,7 @@ from . import render
 from .backend import Backend, CallContext
 from .config import Config
 from .logio import RunDir
-from .review import ReviewOutcome, derive_seed, prompt_sha, run_review
+from .review import ReviewOutcome, derive_seed, prompt_sha, reply_event_fields, run_review
 from .schedule import AGENTS, LABELS, PARTNER, Schedule, reviewed_slots
 from .scoring import score_round
 from .state import LedgerEntry, Reviewed, SessionState
@@ -141,11 +141,8 @@ class Session:
             accepted = next((c for c in outs[a].calls if c.kind == "review" and c.ok), None)
             events += [{"type": "call", "round": r, "agent": a, **c.as_event()} for c in outs[a].calls]
             events.append({"type": "call", "round": r, "agent": a, "kind": "notes", "attempt": 0, "seed": nseed,
-                           "prompt_sha256": prompt_sha(nmsgs), "prompt_tokens": nreply.prompt_tokens,
-                           "completion_tokens": nreply.completion_tokens, "cached_tokens": nreply.cached_tokens,
-                           "finish_reason": nreply.finish_reason, "latency": round(nreply.latency, 3), "ok": True,
-                           "error": None, "text": nreply.text,
-                           **({"reasoning": nreply.reasoning} if nreply.reasoning else {})})
+                           "prompt_sha256": prompt_sha(nmsgs), "ok": True, "error": None,
+                           **reply_event_fields(nreply)})
             events.append({
                 "type": "round", "round": r, "agent": a, "arm": st.arm, "blind": blind, "reviews": reviews,
                 "own": {"slot": a, "fn_id": own.fn_id, "source": own.source, "buggy": own.buggy,

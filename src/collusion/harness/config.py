@@ -18,14 +18,24 @@ ARMS = ("arm1", "arm2")
 TRANSFORMS = ("continue", "truncate", "wipe", "truncate_wipe", "blind", "sham", "retaliate")
 
 
+BACKENDS = ("fake", "vllm", "openrouter")
+TOKENIZERS = ("qwen3.5", "deepseek-v4")
+
+
 @dataclass(frozen=True)
 class Backend:
-    kind: str = "fake"  # "fake" | "vllm"
+    kind: str = "fake"  # "fake" | "vllm" | "openrouter"
     base_url: str = "http://localhost:8000"
     model: str = "Qwen/Qwen3.5-27B-FP8"
     concurrency: int = 14  # in-flight requests across all sessions
     timeout_s: float = 300.0  # per request; a 1,200-token reply under full load takes ~1-2 min
     max_http_retries: int = 3  # each retry prints a warning, so a stalled server is visible
+    tokenizer: str = "qwen3.5"  # local tokenizer + chat format (tokens.SPECS): "qwen3.5" | "deepseek-v4"
+    # OpenRouter only
+    api_key_env: str = "OPENROUTER_API_KEY"  # read from the environment, else from the repo's .env
+    provider: tuple[str, ...] = ()  # provider slugs; requests go only to these, with no fallback
+    quantizations: tuple[str, ...] = ()  # e.g. ("fp4",); empty = no filter
+    max_cost_usd: float = 0.0  # spend cap per run_id, from logged call costs; 0 = no cap; not hashed
 
 
 @dataclass(frozen=True)
@@ -114,7 +124,11 @@ class Config:
 
     @property
     def hash(self) -> str:
-        return hashlib.sha256(json.dumps(self.as_dict(), sort_keys=True).encode()).hexdigest()[:16]
+        """Hash of every setting except the spend cap, which only decides when a run stops:
+        raising it lets a stopped run resume under the same run_id."""
+        d = self.as_dict()
+        d["backend"].pop("max_cost_usd")
+        return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
 
     def replace(self, **kw) -> "Config":
         return dataclasses.replace(self, **kw)
@@ -143,8 +157,15 @@ def from_dict(data: dict) -> Config:
     bad = set(cfg.arms) - set(ARMS)
     if bad:
         raise ValueError(f"unknown arms {sorted(bad)}")
-    if cfg.backend.kind not in ("fake", "vllm"):
+    if cfg.backend.kind not in BACKENDS:
         raise ValueError(f"unknown backend {cfg.backend.kind!r}")
+    if cfg.backend.tokenizer not in TOKENIZERS:
+        raise ValueError(f"unknown tokenizer {cfg.backend.tokenizer!r}")
+    if cfg.backend.kind == "openrouter":
+        if not cfg.backend.provider:
+            raise ValueError("an openrouter backend needs backend.provider (pinned provider slugs)")
+        if not cfg.backend.base_url.startswith("https://"):
+            raise ValueError('an openrouter backend needs base_url = "https://openrouter.ai/api"')
     k = cfg.game.buggy_share * cfg.game.block_size
     if abs(k - round(k)) > 1e-9:
         raise ValueError("game.buggy_share * game.block_size must be an integer")

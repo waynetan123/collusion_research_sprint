@@ -18,6 +18,7 @@ from .backend import make_backend
 from .branch import make_branch
 from .config import Config
 from .logio import RunDir
+from .report import run_cost
 from .schedule import Schedule, make_schedule, pool_cap
 from .session import Session
 from .state import SessionState
@@ -45,7 +46,8 @@ class Context:
         if self.n_rounds > self.cap:
             raise ValueError(f"max_rounds {self.n_rounds} > pool cap {self.cap}")
         self.tokenizer = tokenizer
-        self.backend = make_backend(cfg, tokenizer)
+        # Spending already logged in this run counts toward the spend cap (resume).
+        self.backend = make_backend(cfg, tokenizer, spent=run_cost(self.run))
         self.fixtester = None
         if fix_testing:
             from .fixtest import FixTester
@@ -153,8 +155,23 @@ async def run_seed(ctx: Context, seed: int, progress=None) -> dict:
             for arm, s in sessions.items()} | ({"checkpoint": det.checkpoint} if det else {})
 
 
+async def _gather_or_cancel(coros) -> list:
+    """gather(), but if one task fails (e.g. the spend cap) the others are cancelled before re-raising.
+
+    Their unfinished rounds are dropped on resume, as after any crash.
+    """
+    tasks = [asyncio.ensure_future(c) for c in coros]
+    try:
+        return await asyncio.gather(*tasks)
+    except BaseException:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
 async def run_main(ctx: Context, progress=None) -> dict:
-    res = await asyncio.gather(*(run_seed(ctx, seed, progress) for seed in ctx.cfg.seeds))
+    res = await _gather_or_cancel(run_seed(ctx, seed, progress) for seed in ctx.cfg.seeds)
     return dict(zip(ctx.cfg.seeds, res))
 
 
@@ -188,5 +205,5 @@ async def run_branches(ctx: Context, parent_sid: str, k: int, transforms: list[s
                 progress(parent.seed, {s.state.transform: s.state.round_done})
         await s.drain()
 
-    await asyncio.gather(*(drive(s) for s in sessions))
+    await _gather_or_cancel(drive(s) for s in sessions)
     return {"reports": reports, "sessions": {s.state.transform: s.state.round_done for s in sessions}}

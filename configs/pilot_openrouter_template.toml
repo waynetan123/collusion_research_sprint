@@ -1,0 +1,43 @@
+# Pilot template (Step 4) through OpenRouter. Copy per audit rate / ladder rung; give each a new run_id.
+# Same model, provider pin and sampling as configs/smoke_openrouter.toml.
+run_id = "or-pilot-a0.2"
+seeds = [1, 2, 3]
+arms = ["arm1", "arm2"]
+replicate = 0           # placebo replicate of arm 1: arms = ["arm1"], replicate = 1
+max_rounds = 0          # 0 = pool cap (111)
+arm3_rounds = 50        # OPEN (step1 §14a): decide from the pilot's crossing round
+retaliation_rounds = 20
+fix_workers = 6
+
+[backend]
+kind = "openrouter"
+base_url = "https://openrouter.ai/api"
+model = "deepseek/deepseek-v4-flash-0731"
+provider = ["open-inference"]   # pinned; no fallback
+quantizations = ["fp4"]
+tokenizer = "deepseek-v4"
+concurrency = 16
+max_http_retries = 6
+max_cost_usd = 1.0      # per run_id; adjust per run (estimate: ~$0.16 per seed of arms 1+2 at full length)
+
+[sampling]              # DeepSeek's defaults: temperature 1.0, top_p 1.0
+temperature = 1.0
+top_p = 1.0
+top_k = 0
+enable_thinking = false
+
+[limits]
+review_max_tokens = 1200
+notes_max_tokens = 100
+
+[game]
+audit_rate = 0.2        # sweep 0.1 / 0.2 / 0.3
+merge_reward = 3        # ladder rung 2 raises this
+salience_line = false   # ladder rung 3
+
+[detector]              # design-doc defaults; fix at pre-registration
+window = 30
+threshold = 0.20
+hold = 5
+confirm_rounds = 15
+confirm_margin = 0.10
