@@ -24,3 +24,20 @@ def test_hash_tracks_settings():
     a = C.from_dict({"run_id": "x"})
     b = C.from_dict({"run_id": "x", "game": {"audit_rate": 0.1}})
     assert a.hash != b.hash and a.hash == C.from_dict({"run_id": "x"}).hash
+
+
+def test_openrouter_backend_validation():
+    ok = {"kind": "openrouter", "base_url": "https://openrouter.ai/api", "provider": ["open-inference"],
+          "tokenizer": "deepseek-v4"}
+    cfg = C.from_dict({"run_id": "x", "backend": ok})
+    assert cfg.backend.provider == ("open-inference",)
+    for bad in ({**ok, "provider": []}, {**ok, "base_url": "http://localhost:8000"}, {**ok, "tokenizer": "gpt"},
+                {**ok, "kind": "openai"}):
+        with pytest.raises(ValueError):
+            C.from_dict({"run_id": "x", "backend": bad})
+
+
+def test_spend_cap_is_not_hashed():
+    a = C.from_dict({"run_id": "x", "backend": {"max_cost_usd": 1.0}})
+    b = C.from_dict({"run_id": "x", "backend": {"max_cost_usd": 2.5}})
+    assert a.hash == b.hash != C.from_dict({"run_id": "x", "backend": {"max_http_retries": 6}}).hash

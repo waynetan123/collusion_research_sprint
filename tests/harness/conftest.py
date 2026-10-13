@@ -1,6 +1,6 @@
 import pytest
 
-from collusion.harness.tokens import local_tokenizer_available
+from collusion.harness.tokens import SPECS, local_tokenizer_available
 from collusion.pool import io as pool_io
 
 
@@ -16,10 +16,12 @@ def pool(pool_list):
     return {r["id"]: r for r in pool_list}
 
 
-@pytest.fixture(scope="session")
-def tok():
-    if not local_tokenizer_available():
-        pytest.skip("Qwen tokenizer not downloaded (python -m collusion.harness fetch-tokenizer)")
+@pytest.fixture(scope="session", params=sorted(SPECS))
+def tok(request):
+    """Every token-matching test runs under each supported model's tokenizer."""
+    if not local_tokenizer_available(request.param):
+        pytest.skip(f"{request.param} tokenizer not downloaded (python -m collusion.harness fetch-tokenizer"
+                    f"{'' if request.param == 'qwen3.5' else ' --config configs/smoke_openrouter.toml'})")
     from collusion.harness.tokens import LocalTokenizer
 
-    return LocalTokenizer()
+    return LocalTokenizer(spec=request.param)
