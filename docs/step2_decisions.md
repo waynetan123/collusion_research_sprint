@@ -326,6 +326,49 @@ Planning arithmetic from the result: the pilot needs about 2,000–2,800 session
 - **If a stall recurs**, capture vLLM's status line before stopping anything (`curl -s localhost:8000/metrics | grep -E "^vllm:(num_requests_running|num_requests_waiting|kv_cache_usage_perc)"`). If vLLM shows requests running with zero generation, retry without `--enable-prefix-caching --mamba-cache-mode align`.
 - **Note:** changing these defaults changes the config hash, so delete old run folders (`smoke-smoke`, `throughput`) before re-running.
 
+**Clean run (user, 2026-10-12, after the timeout and warning fix):**
+
+| Measure | Value |
+|---|---|
+| Session-rounds | 60 (12 sessions × 5 rounds), no stall and no retry warnings |
+| Wall time | 523 s, so **6.9 session-rounds per minute** |
+| Generated tokens | 55,117, so **105 tokens/s** (about 919 per session-round) |
+| Seconds per round per session | 78–92 (about 22 s for a single pair) |
+| Preemptions | 0 |
+| Prefix cache hit rate | 0.292 (0.38–0.43 with a single pair: more sessions compete for the cache) |
+
+**Estimates from this run (rounds 1–5 only):**
+- **Calibration (Step 3):** ~3,330 one-shot reviews at ~250 generated tokens each is ~0.8M tokens, **~2–3 h**. Independent requests should batch better than lockstep sessions.
+- **Pilot (Step 4):** 2,000–2,800 session-rounds ÷ 6.9 per minute is **~5–7 h**, the upper half of the doc's 4–8 h.
+- **Full run (Steps 5–7) at the 111-round cap:** arm 1 12 × 111 = 1,332; arm 2 ≤ 12 × 61 ≈ 730; arm 3 ~8 × 5 × 50 = 2,000; retaliation ~160. That is ~4,200 session-rounds, **~10 h** at this rate.
+- **Critical path:** one 111-round session at ~85 s per round takes ~2.6 h. That covers arm 2 to its deadline, then arm 3.
+
+**Caveat: these are optimistic for late rounds.** Prompts here were ~2k tokens. By round 111 a prompt reaches roughly 1,500 + 111 × ~150 ≈ 18k tokens (ledger plus a ~60-word note per round). The bf16 KV cache holds 131,072 tokens and histories are not shared between sessions, so only ~7 late-round requests fit at once against 16 now. Expect fewer requests in flight, cache evictions with longer prefills, possibly preemptions, and lower throughput late in each session.
+- **Recommendation:** decide the KV-cache precision **before Step 3**. Try `--kv-cache-dtype fp8`, as the doc suggests: about twice the capacity, so ~14 late-round requests fit. The doc requires precision to be the same across calibration, pilot and full run, so it cannot change after calibration. If fp8 starts, run the smoke test; if the tokenizer check and parse rates look as before, adopt it and record it.
+
+### 13d. KV-cache precision: fp8 adopted (user, 2026-10-12)
+
+**Decision:** `--kv-cache-dtype fp8` for every run from Step 3 on. This follows the doc ("FP8 KV cache if it works with this model on Ampere, otherwise bf16"). It must not change after calibration.
+
+**Confirmed from vLLM's `/metrics` (`vllm:cache_config_info`):**
+- `cache_dtype="fp8"`.
+- `kv_cache_size_tokens=309475`, up from 131,072 at bf16 (×2.4). The extra gain over ×2 is because smaller entries freed memory that vLLM gave to the cache (`num_gpu_blocks` 192 → 255).
+- `kv_cache_max_concurrency=9.44` at 32,768 tokens per request (was 4.0). At late-round prompts of ~18k tokens, about 17 requests fit, so all 16 slots stay usable to round 111.
+- `mamba_ssm_cache_dtype="float32"`: the linear-attention state is unaffected.
+- `block_size=1568`: with `--mamba-cache-mode align`, prefix caching matches in whole 1,568-token blocks. Hit rates are lower than token-level matching would give; this is expected, not a fault.
+- No calibrated KV scales ship with the checkpoint, so vLLM uses scale 1.0.
+
+**Quality check:** smoke test with fp8 plus prompts v3, compared with v2 plus bf16 (§13b), at 5 rounds:
+- Tokenizer check OK.
+- 0 parse failures, imputed verdicts or missing fixes; 100% of fixes for real bugs pass.
+- Clean partner patches rejected: 0 of 12 (was 1 of 12). Buggy patches approved: 1 of 16 (unchanged; the approval was in arm 1).
+- Generated tokens per round 653 / 714, down from 1,127 / 986. That drop comes from the v3 fix wording, not from fp8.
+- ~25 s per round (was ~22), a small cost of converting fp8 back to 16-bit on the A40, or noise.
+
+This rules out a large quality drop from fp8, not a small one; calibration measures the rest.
+
+**Server command, fixed:** `scripts/serve_vllm.sh <gpu>`. It logs the vLLM version to `vllm.log`, which is gitignored.
+
 ## 14. Open items for later steps
 
 - **Prompt review** (§6), before the pilot.
