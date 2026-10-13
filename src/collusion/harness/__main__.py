@@ -197,7 +197,8 @@ def cmd_smoke(args) -> None:
     cfg = C.load(args.config)
     if cfg.backend.kind != "vllm":
         raise SystemExit("smoke needs backend.kind = 'vllm'")
-    cfg = cfg.replace(seeds=cfg.seeds[:1], max_rounds=args.rounds, run_id=cfg.run_id + "-smoke")
+    # arm3_rounds=0: no arm 3 follows a smoke run, so arm 2 plays all rounds (its deadline is cap - arm3_rounds).
+    cfg = cfg.replace(seeds=cfg.seeds[:1], max_rounds=args.rounds, arm3_rounds=0, run_id=cfg.run_id + "-smoke")
     tok = _tokenizer(required=True)
     pool_list = load_pool()
     pool = {r["id"]: r for r in pool_list}
@@ -219,8 +220,11 @@ def cmd_smoke(args) -> None:
         finally:
             await be.aclose()
         ctx = Context(cfg, tok, fix_testing=True, fix_mode=args.fix_mode)
+        cb, bars = _progress()
         try:
-            res = await run_main(ctx)
+            res = await run_main(ctx, cb)
+            for b in bars.values():
+                b.close()
             m1 = await ctx.backend.metrics()
         finally:
             await ctx.close()
