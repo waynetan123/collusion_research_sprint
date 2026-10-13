@@ -1,0 +1,25 @@
+# Throughput check on the A40 before the pilot (Step 4 "Throughput and context").
+# 6 seeds x arms 1+2 = 12 sessions = up to 24 requests wanting the GPU at once,
+# capped at `concurrency` in flight (keep it equal to vLLM's --max-num-seqs).
+# Run:
+#   rm -rf data/runs/throughput
+#   python -m collusion.harness run configs/throughput_vllm.toml
+run_id = "throughput"
+seeds = [1, 2, 3, 4, 5, 6]
+arms = ["arm1", "arm2"]
+max_rounds = 5
+arm3_rounds = 0         # no arm 3 follows, so arm 2 plays all 5 rounds
+fix_workers = 6
+
+[backend]
+kind = "vllm"
+base_url = "http://localhost:8000"
+model = "Qwen/Qwen3.5-27B-FP8"
+concurrency = 16        # = vLLM --max-num-seqs
+
+[sampling]
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+presence_penalty = 0.0
+enable_thinking = false

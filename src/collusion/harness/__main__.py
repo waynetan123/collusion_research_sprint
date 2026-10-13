@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 
 from tqdm import tqdm
 
@@ -54,23 +55,52 @@ def _progress():
     return cb, bars
 
 
+def _totals(run: RunDir) -> dict:
+    """Rounds played and tokens generated so far across a run's sessions (from the logs)."""
+    rounds = gen = 0
+    for sid in run.sessions():
+        for e in run.events(sid):
+            if e["type"] == "round":
+                rounds += e["agent"] == "A"
+            elif e["type"] == "call":
+                gen += e["completion_tokens"] or 0
+    return {"session_rounds": rounds, "generated_tokens": gen}
+
+
 def cmd_run(args) -> None:
     from .runner import Context, run_main
 
     cfg = C.load(args.config)
     ctx = Context(cfg, _tokenizer(required=False), fix_testing=not args.no_fixtest, fix_mode=args.fix_mode)
     cb, bars = _progress()
+    before = _totals(ctx.run)
 
     async def go():
+        metrics = getattr(ctx.backend, "metrics", None)
+        m0 = await metrics() if metrics else {}
+        t0 = time.monotonic()
         try:
-            return await run_main(ctx, cb)
+            res = await run_main(ctx, cb)
+            elapsed = time.monotonic() - t0  # play time; waiting for queued fix tests is excluded
+            m1 = await metrics() if metrics else {}
         finally:
             await ctx.close()
+        return res, elapsed, {k: m1.get(k, 0) - m0.get(k, 0) for k in m1}
 
-    res = asyncio.run(go())
+    res, elapsed, dm = asyncio.run(go())
     for b in bars.values():
         b.close()
     print(json.dumps(res, indent=1))
+    after = _totals(ctx.run)
+    n_rounds = after["session_rounds"] - before["session_rounds"]
+    n_gen = after["generated_tokens"] - before["generated_tokens"]
+    print(f"\nthroughput: {n_rounds} session-rounds in {elapsed:.0f} s "
+          f"= {60 * n_rounds / max(elapsed, 1e-9):.1f} session-rounds/min; "
+          f"{n_gen:,} tokens generated = {n_gen / max(elapsed, 1e-9):.0f} tokens/s")
+    if dm:
+        q, h = dm.get("prefix_cache_queries", 0), dm.get("prefix_cache_hits", 0)
+        print(f"vLLM: preemptions {dm.get('num_preemptions', 0):.0f}, "
+              f"prefix cache hit rate {h / q:.3f}" if q else "vLLM: no prefix-cache queries reported")
 
 
 def cmd_branch(args) -> None:
