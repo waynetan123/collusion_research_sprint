@@ -22,7 +22,6 @@ import json
 import sys
 import time
 
-from tqdm import tqdm
 
 from . import config as C
 from .logio import RunDir
@@ -45,18 +44,20 @@ def _tokenizer(required: bool, cfg: C.Config | None = None):
         return None
 
 
-def _progress():
-    bars: dict = {}
+def _progress(ctx):
+    """Loading bars: an overall bar (session-rounds, fix tests) and one bar per session (progress.py)."""
+    from .progress import Progress
 
-    def cb(seed, rounds: dict):
-        for name, r in rounds.items():
-            key = (seed, name)
-            if key not in bars:
-                bars[key] = tqdm(desc=f"seed {seed} {name}", unit="round", position=len(bars), dynamic_ncols=True)
-            bars[key].n = r
-            bars[key].refresh()
+    return Progress(ctx.fixtester)
 
-    return cb, bars
+
+async def _ticking(prog, coro):
+    """Await `coro` while refreshing the bars every few seconds (elapsed time and ETA stay live)."""
+    tick = asyncio.ensure_future(prog.ticker())
+    try:
+        return await coro
+    finally:
+        tick.cancel()
 
 
 def _totals(run: RunDir) -> dict:
@@ -92,7 +93,7 @@ def cmd_run(args) -> None:
 
     cfg = C.load(args.config)
     ctx = Context(cfg, _tokenizer(required=False, cfg=cfg), fix_testing=not args.no_fixtest, fix_mode=args.fix_mode)
-    cb, bars = _progress()
+    prog = _progress(ctx)
     before = _totals(ctx.run)
 
     async def go():
@@ -100,8 +101,8 @@ def cmd_run(args) -> None:
         m0 = await metrics() if metrics else {}
         t0 = time.monotonic()
         try:
-            res = await run_main(ctx, cb)
-            elapsed = time.monotonic() - t0  # play time; waiting for queued fix tests is excluded
+            res = await _ticking(prog, run_main(ctx, prog))
+            elapsed = time.monotonic() - t0
             m1 = await metrics() if metrics else {}
         finally:
             await ctx.close()
@@ -111,12 +112,10 @@ def cmd_run(args) -> None:
     try:
         res, elapsed, dm = asyncio.run(go())
     except (BudgetExceeded, OutOfCredit) as e:
-        for b in bars.values():
-            b.close()
+        prog.close()
         _stopped(e, ctx.run)
         raise SystemExit(2)
-    for b in bars.values():
-        b.close()
+    prog.close()
     print(json.dumps(res, indent=1))
     after = _totals(ctx.run)
     n_rounds = after["session_rounds"] - before["session_rounds"]
@@ -145,23 +144,21 @@ def cmd_branch(args) -> None:
         raise SystemExit(f"unknown transforms {sorted(bad)}")
     ctx = Context(cfg, _tokenizer(required=True, cfg=cfg), fix_testing=not args.no_fixtest, fix_mode=args.fix_mode)
     k = args.round if args.round is not None else checkpoint_round(ctx, args.session)
-    cb, bars = _progress()
+    prog = _progress(ctx)
 
     async def go():
         try:
-            return await run_branches(ctx, args.session, k, transforms, cb)
+            return await _ticking(prog, run_branches(ctx, args.session, k, transforms, prog))
         finally:
             await ctx.close()
 
     try:
         res = asyncio.run(go())
     except (BudgetExceeded, OutOfCredit) as e:
-        for b in bars.values():
-            b.close()
+        prog.close()
         _stopped(e, ctx.run)
         raise SystemExit(2)
-    for b in bars.values():
-        b.close()
+    prog.close()
     print(json.dumps(res, indent=1))
 
 
@@ -318,11 +315,10 @@ def _smoke_vllm(args, cfg) -> None:
         finally:
             await be.aclose()
         ctx = Context(cfg, tok, fix_testing=True, fix_mode=args.fix_mode)
-        cb, bars = _progress()
+        prog = _progress(ctx)
         try:
-            res = await run_main(ctx, cb)
-            for b in bars.values():
-                b.close()
+            res = await _ticking(prog, run_main(ctx, prog))
+            prog.close()
             m1 = await ctx.backend.metrics()
         finally:
             await ctx.close()
@@ -414,14 +410,13 @@ def _smoke_openrouter(args, cfg) -> None:
     print(f"probe cost: ${probe_cost:.5f} (not logged in the run)")
 
     ctx = Context(cfg, tok, fix_testing=True, fix_mode=args.fix_mode)
-    cb, bars = _progress()
+    prog = _progress(ctx)
 
     async def go():
         try:
-            return await run_main(ctx, cb)
+            return await _ticking(prog, run_main(ctx, prog))
         finally:
-            for b in bars.values():
-                b.close()
+            prog.close()
             await ctx.close()
 
     try:

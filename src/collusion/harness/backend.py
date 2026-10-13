@@ -126,7 +126,8 @@ class _OpenAICompatBackend:
                 delay = min(60.0, 2.0**attempt)
                 from tqdm import tqdm
 
-                tqdm.write(f"warning: {self.label} {path} failed ({type(e).__name__}: {str(e)[:120]}); "
+                why = str(e)[:120] or "connection closed before the reply arrived"
+                tqdm.write(f"warning: {self.label} {path} failed ({type(e).__name__}: {why}); "
                            f"retry {attempt + 1}/{self.cfg.backend.max_http_retries} in {delay:.0f} s", file=sys.stderr)
                 await asyncio.sleep(delay)
         raise AssertionError("unreachable")

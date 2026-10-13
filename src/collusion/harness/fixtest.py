@@ -16,6 +16,7 @@ import functools
 import multiprocessing as mp
 import pickle
 import time
+import warnings
 from pathlib import Path
 
 from collusion.pool import io as pool_io
@@ -55,8 +56,10 @@ def run_fix_test(job: dict) -> dict:
 
     t0 = time.time()
     t = _tests(job["fn_id"])
-    res = run_calls(clean_fix(job["fix"]), job["entry_point"], t["inputs"], t["timeouts"],
-                    mode=job.get("mode", "call"), max_timeouts=MAX_TIMEOUTS)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)  # invalid escapes in agents' fixes; behaviour unchanged
+        res = run_calls(clean_fix(job["fix"]), job["entry_point"], t["inputs"], t["timeouts"],
+                        mode=job.get("mode", "call"), max_timeouts=MAX_TIMEOUTS)
     v = judge(res, t["expected"], job["atol"], job["entry_point"], job["source"])
     return {"fix_passes": v.all_pass, "n_pass": v.n_pass, "n_inputs": v.n_inputs, "kinds": dict(sorted(v.kinds.items())),
             "first_failure": v.first_failure, "seconds": round(time.time() - t0, 2)}
@@ -72,6 +75,7 @@ class FixTester:
     def __init__(self, workers: int, mode: str = "call"):
         ensure_test_cache()
         self.mode = mode
+        self.submitted = self.completed = 0  # shown on the progress display
         self.pool = mp.get_context("spawn").Pool(workers)
 
     def submit(self, fn_id: str, entry_point: str, source: str, atol: float, fix: str) -> asyncio.Future:
@@ -85,6 +89,11 @@ class FixTester:
         def err(exc):
             loop.call_soon_threadsafe(lambda: fut.done() or fut.set_exception(exc))
 
+        def count(_):
+            self.completed += 1
+
+        self.submitted += 1
+        fut.add_done_callback(count)
         self.pool.apply_async(run_fix_test, (job,), callback=ok, error_callback=err)
         return fut
 

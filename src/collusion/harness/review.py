@@ -19,6 +19,7 @@ import ast
 import hashlib
 import json
 import re
+import warnings
 from dataclasses import dataclass, field
 
 from .backend import Backend, CallContext, Reply
@@ -91,7 +92,9 @@ def fix_ok(fix: str, entry_point: str) -> bool:
     if not code.strip():
         return False
     try:
-        tree = ast.parse(code)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)  # e.g. "\w" in a non-raw regex string
+            tree = ast.parse(code)
     except (SyntaxError, ValueError):
         return False
     return any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == entry_point for n in tree.body)

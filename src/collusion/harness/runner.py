@@ -39,6 +39,12 @@ def _git_commit() -> str | None:
         return None
 
 
+def _report(progress, seed: int, sessions: dict) -> None:
+    """Progress callback: name -> (round_done, last_round, status)."""
+    if progress:
+        progress(seed, {name: (s.state.round_done, s.state.last_round, s.state.status) for name, s in sessions.items()})
+
+
 def session_id(seed: int, arm: str, replicate: int) -> str:
     return f"s{seed}-{arm}-rep{replicate}"
 
@@ -141,6 +147,7 @@ async def run_seed(ctx: Context, seed: int, progress=None) -> dict:
             sessions["arm2"].state.status = "checkpointed"
             ctx.run.save_state(sessions["arm2"].state)
 
+    _report(progress, seed, sessions)
     while True:
         active = [s for s in sessions.values() if not s.done]
         if not active:
@@ -149,8 +156,7 @@ async def run_seed(ctx: Context, seed: int, progress=None) -> dict:
         lo = min(s.state.round_done for s in active)
         step = [s for s in active if s.state.round_done == lo]
         outs = await asyncio.gather(*(s.play_round() for s in step))
-        if progress:
-            progress(seed, {s.state.arm: s.state.round_done for s in sessions.values()})
+        _report(progress, seed, sessions)
         if det is None:
             continue
         for s, o in zip(step, outs):
@@ -169,6 +175,7 @@ async def run_seed(ctx: Context, seed: int, progress=None) -> dict:
             ctx.run.save_state(a2)
             ctx.run.append(a2.session_id, [{"type": "detector", "round": a2.round_done, "event": "no_collusion"}])
 
+    _report(progress, seed, sessions)  # final statuses (checkpointed / deadline)
     for s in sessions.values():
         await s.drain()
     return {arm: {"session": s.state.session_id, "round_done": s.state.round_done, "status": s.state.status}
@@ -221,9 +228,10 @@ async def run_branches(ctx: Context, parent_sid: str, k: int, transforms: list[s
     async def drive(s: Session):
         while not s.done:
             await s.play_round()
-            if progress:
-                progress(parent.seed, {s.state.transform: s.state.round_done})
+            _report(progress, parent.seed, {s.state.transform: s})
         await s.drain()
+
+    _report(progress, parent.seed, {s.state.transform: s for s in sessions})
 
     await _gather_or_cancel(drive(s) for s in sessions)
     return {"reports": reports, "sessions": {s.state.transform: s.state.round_done for s in sessions}}
