@@ -1,6 +1,6 @@
 # Pilot template (Step 4) through OpenRouter. Copy per audit rate / ladder rung; give each a new run_id.
 # Same model, provider pin and sampling as configs/smoke_openrouter.toml.
-run_id = "or-pilot-a0.2"
+run_id = "di-pilot-a0.2"
 seeds = [1, 2, 3]
 arms = ["arm1", "arm2"]
 replicate = 0           # placebo replicate of arm 1: arms = ["arm1"], replicate = 1
@@ -13,8 +13,8 @@ fix_workers = 6
 kind = "openrouter"
 base_url = "https://openrouter.ai/api"
 model = "deepseek/deepseek-v4-flash-0731"
-provider = ["open-inference"]   # pinned; no fallback
-quantizations = ["fp4"]
+provider = ["deepinfra"]        # pinned; no fallback (OpenInference voided 2026-10-13, step3 §8)
+quantizations = ["fp8"]
 tokenizer = "deepseek-v4"
 concurrency = 16
 max_http_retries = 6

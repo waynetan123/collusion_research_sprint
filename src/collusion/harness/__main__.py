@@ -219,6 +219,7 @@ def cmd_fixtest(args) -> None:
 
     cfg = C.load(args.config)
     run = RunDir(cfg.run_id)
+    lock = run.lock()  # not while the run itself is still playing
     pool = {r["id"]: r for r in load_pool()}
 
     async def go():
@@ -244,7 +245,10 @@ def cmd_fixtest(args) -> None:
             ft.close()
         return n
 
-    print(f"tested {asyncio.run(go())} fixes")
+    try:
+        print(f"tested {asyncio.run(go())} fixes")
+    finally:
+        lock.close()
 
 
 def cmd_judge(args) -> None:
@@ -282,6 +286,23 @@ def cmd_smoke(args) -> None:
         _smoke_openrouter(args, cfg)
     else:
         raise SystemExit("smoke needs backend.kind = 'vllm' or 'openrouter'")
+
+
+def _health(run: RunDir) -> bool:
+    """Print long-context health per 10-round block (both arms pooled) and return whether the last block passes.
+
+    A provider that degrades as prompts grow passes a 5-round smoke test and fails later
+    (OpenInference, 2026-10-13: docs/step3_decisions.md §8); run smoke with --rounds 40.
+    """
+    from .report import HEALTH_MIN_CORRECT, HEALTH_MIN_FIX_FIRST_TRY, health_by_block, health_ok
+
+    rows = health_by_block([e for sid in run.sessions() for e in run.events(sid, "round")])
+    print(f"\nlong-context health (need >= {HEALTH_MIN_CORRECT} correct and >= {HEALTH_MIN_FIX_FIRST_TRY} fixes usable "
+          "first try in the last block):")
+    for r in rows:
+        print(f"  rounds {r['rounds']:<7} correct {r['correct']}  ({r['reviews']} reviews)   "
+              f"fix first try {r['fix_first_try']}  ({r['rejections']} rejections)")
+    return health_ok(rows)
 
 
 def _smoke_vllm(args, cfg) -> None:
@@ -330,6 +351,7 @@ def _smoke_vllm(args, cfg) -> None:
     q, h = dm.get("prefix_cache_queries", 0), dm.get("prefix_cache_hits", 0)
     print(f"prefix cache hit rate: {h / q:.3f}" if q else "prefix cache: no queries reported")
     cmd_summary(argparse.Namespace(run_id=cfg.run_id))
+    print("PASS" if _health(RunDir(cfg.run_id)) else "FAIL", " long-context health in the last block")
 
 
 def _smoke_openrouter(args, cfg) -> None:
@@ -431,6 +453,7 @@ def _smoke_openrouter(args, cfg) -> None:
     checks[f"run served by one provider {run_providers}"] = len(run_providers) == 1
     checks["run used no reasoning tokens"] = sum(row["reasoning_tokens"] for row in rows) == 0
     checks["no imputed verdicts"] = sum(row["verdicts_imputed"] for row in rows) == 0
+    checks[f"long-context health in the last block (rounds up to {args.rounds}; use --rounds 40)"] = _health(ctx.run)
     rounds = sum(row["rounds"] for row in rows)
     total = run_cost(ctx.run)
     print(f"\nrun cost: ${total:.4f} for {rounds} session-rounds = ${total / max(rounds, 1):.5f} per session-round")
@@ -493,7 +516,8 @@ def main(argv=None) -> None:
 
     p = sub.add_parser("smoke")
     p.add_argument("config")
-    p.add_argument("--rounds", type=int, default=5)
+    p.add_argument("--rounds", type=int, default=5,
+                   help="rounds per session; 40 validates long-context behaviour before a main run")
     p.add_argument("--fix-mode", default="call", choices=["call", "batch"])
     p.set_defaults(fn=cmd_smoke)
 

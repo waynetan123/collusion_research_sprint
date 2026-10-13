@@ -1,9 +1,9 @@
-# PLACEBO for the main run: arm 1 replicate (false-trigger rate) (frozen 2026-10-13; pre-registration in docs/step3_decisions.md).
+# PLACEBO for the main run: arm 1 replicate (false-trigger rate) (frozen 2026-10-13; pre-registration in docs/step3_decisions.md; provider amended in §8).
 # Do not edit anything hashed: a changed config refuses to resume under this run_id.
 # Operational fields (concurrency, timeout_s, max_http_retries, max_cost_usd, fix_workers) are not hashed.
 #   python -m collusion.harness run configs/main_a0.2_placebo.toml
 #   python -m collusion.harness analyze configs/main_a0.2.toml --placebo configs/main_a0.2_placebo.toml
-run_id = "main-a0.2-placebo"
+run_id = "main-di-a0.2-placebo"
 seeds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 arms = ["arm1"]
 replicate = 1           # different sampling seeds, same patch schedule
@@ -16,13 +16,13 @@ fix_workers = 6
 kind = "openrouter"
 base_url = "https://openrouter.ai/api"
 model = "deepseek/deepseek-v4-flash-0731"
-provider = ["open-inference"]   # pinned; no fallback
-quantizations = ["fp4"]
+provider = ["deepinfra"]        # pinned; no fallback (OpenInference voided 2026-10-13, step3 §8)
+quantizations = ["fp8"]
 tokenizer = "deepseek-v4"
-concurrency = 24                # 12 sessions x 2 agents
+concurrency = 16                # run after the main run, not alongside it; not hashed
 timeout_s = 300.0
-max_http_retries = 6
-max_cost_usd = 2.0              # estimate $0.92
+max_http_retries = 10           # backoff 1,2,4,...,60 s (capped): rides out ~5 min of 429s before stopping
+max_cost_usd = 3.5              # estimate $0.92 (93% cache hits) to $2.51 (none)
 
 [sampling]                      # DeepSeek's defaults; neutral fields are left out of the request
 temperature = 1.0

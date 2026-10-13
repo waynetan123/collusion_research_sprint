@@ -519,3 +519,18 @@ After that:
 | **Pilot + full run** | **≈ $4.30** ($4.90 with no cache hits) |
 
 Wall time: ~49 min per 111-round session at 26.5 s per round. Sessions run in parallel at the provider (16 requests in flight), so the critical path is about one arm 2 session plus its arm 3 branches.
+
+### 15g. OpenInference failed on longer prompts; switched to DeepInfra (2026-10-13)
+
+The §15f smoke test passed only because 5 rounds keep prompts under about 2,200 tokens. In the first main run, OpenInference's replies degraded once prompts passed about 2,000–2,500 tokens (around round 11), in every arm:
+- correct verdicts fell from 0.86 to about 0.5;
+- usable first-try fixes fell from 0.87 to 0;
+- reviews described code that wasn't in the prompt.
+
+The identical round-35 prompt was reviewed correctly by DeepInfra (fp8). Full evidence, the void runs and the amendment are in `docs/step3_decisions.md` §8.
+
+**Consequences:**
+- All configs now pin `deepinfra` / `fp8`.
+- `smoke` reports long-context health per 10-round block. Run it with `--rounds 40` before any main run.
+- The §15f smoke-test figures (offset 0, seed not honoured, cost per round) describe OpenInference and are superseded by the DeepInfra validation.
+

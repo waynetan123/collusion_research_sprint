@@ -100,3 +100,17 @@ def test_config_change_needs_new_run_id(tmp_path, pool_list):
         assert "different config" in str(e)
     else:
         raise AssertionError("expected a config-hash error")
+
+
+def test_second_process_on_same_run_is_refused(tmp_path, pool_list):
+    import pytest
+
+    cfg = _cfg("locked", max_rounds=5)
+    first = Context(cfg, None, fix_testing=False, base=tmp_path)
+    try:
+        with pytest.raises(RuntimeError, match="already in use"):
+            Context(cfg, None, fix_testing=False, base=tmp_path)
+    finally:
+        asyncio.run(first.close())
+    second = Context(cfg, None, fix_testing=False, base=tmp_path)  # released on close
+    asyncio.run(second.close())

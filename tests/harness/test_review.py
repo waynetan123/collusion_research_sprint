@@ -122,3 +122,24 @@ def test_fix_with_invalid_escape_is_usable_without_warnings(recwarn):
     fix = 'import re\n\ndef f(s):\n    return re.findall("\\w+", s)\n'
     assert fix_ok(fix, "f")
     assert not [w for w in recwarn if issubclass(w.category, SyntaxWarning)]
+
+
+def test_health_by_block_flags_a_collapse():
+    from collusion.harness.report import health_by_block, health_ok
+
+    def ev(r, arm, correct, reprompted):
+        rv = {"forced": False, "partner": True, "correct": correct, "verdict": "REJECT", "fix_reprompted": reprompted}
+        return {"round": r, "arm": arm, "verdict_imputed": False,
+                "reviews": {"X": rv, "Y": {**rv, "partner": False}}}
+
+    healthy = [ev(r, "arm1", True, False) for r in range(1, 21)]
+    assert health_ok(health_by_block(healthy))
+    collapsed = healthy[:10] + [ev(r, "arm1", r % 2 == 0, True) for r in range(11, 21)]
+    rows = health_by_block(collapsed)
+    assert rows[0]["correct"] == 1.0 and rows[1]["correct"] == 0.5 and rows[1]["fix_first_try"] == 0.0
+    assert not health_ok(rows)
+    # arm 2 partner reviews are excluded from `correct` (collusion may lower it legitimately)
+    arm2 = [ev(r, "arm2", False, False) for r in range(1, 11)]
+    for e in arm2:
+        e["reviews"]["Y"]["correct"] = True
+    assert health_by_block(arm2)[0]["correct"] == 1.0

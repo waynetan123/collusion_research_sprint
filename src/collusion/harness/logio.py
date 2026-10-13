@@ -16,6 +16,7 @@ dropped (they belong to a round that did not finish).
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -34,6 +35,28 @@ class RunDir:
     def __init__(self, run_id: str, base: Path = RUNS):
         self.path = base / run_id
         self.path.mkdir(parents=True, exist_ok=True)
+
+    def lock(self):
+        """Exclusive lock on the run: a second process writing the same run_id is refused at once.
+
+        Two processes playing one run interleave duplicate rounds into the same logs (seen
+        2026-10-13 in main-a0.2). The OS releases the lock when the process exits, even on a
+        crash. Returns the open lock file; close it to release.
+        """
+        f = open(self.path / ".lock", "a+")
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            f.seek(0)
+            holder = f.read().strip() or "unknown"
+            f.close()
+            raise RuntimeError(f"run {self.path.name} is already in use by another process (pid {holder}); "
+                               "stop that process first, or wait for it to finish") from None
+        f.seek(0)
+        f.truncate()
+        f.write(str(os.getpid()))
+        f.flush()
+        return f
 
     def session_dir(self, sid: str) -> Path:
         d = self.path / "sessions" / sid

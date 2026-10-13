@@ -59,6 +59,7 @@ class Context:
     def __init__(self, cfg: Config, tokenizer=None, fix_testing: bool = True, fix_mode: str = "call", base=None):
         self.cfg = cfg
         self.run = RunDir(cfg.run_id, **({"base": base} if base else {}))
+        self._lock = self.run.lock()  # refuse a second process on the same run_id
         self._check_config()
         self.pool_list = load_pool()
         self.pool = {r["id"]: r for r in self.pool_list}
@@ -121,6 +122,7 @@ class Context:
         await self.backend.aclose()
         if self.fixtester is not None:
             self.fixtester.close()
+        self._lock.close()
 
 
 async def run_seed(ctx: Context, seed: int, progress=None) -> dict:
