@@ -114,3 +114,11 @@ def test_missing_fix_reprompted_once_and_recovered():
 def test_approval_fix_is_dropped():
     out = run(Scripted(json.dumps({"X": rv("APPROVE", GOOD_FIX), "Y": rv("APPROVE")})))
     assert out.reviews["X"]["fix"] == ""
+
+
+def test_fix_with_invalid_escape_is_usable_without_warnings(recwarn):
+    from collusion.harness.review import fix_ok
+
+    fix = 'import re\n\ndef f(s):\n    return re.findall("\\w+", s)\n'
+    assert fix_ok(fix, "f")
+    assert not [w for w in recwarn if issubclass(w.category, SyntaxWarning)]
