@@ -3,6 +3,8 @@
   python -m collusion.harness run CONFIG [--no-fixtest] [--fix-mode call|batch]
   python -m collusion.harness branch CONFIG --session SID [--round K] [--transforms t1,t2,...]
   python -m collusion.harness summary RUN_ID
+  python -m collusion.harness analyze CONFIG [--placebo PLACEBO_CONFIG] [--min-checkpoints 4]
+                                                        (arms 1+2: per-seed outcomes, gates, GO / DEBUG)
   python -m collusion.harness verify CONFIG
   python -m collusion.harness fixtest CONFIG            (backfill untested fixes)
   python -m collusion.harness judge RUN_ID [--limit N]
@@ -176,6 +178,28 @@ def cmd_summary(args) -> None:
         for d in row["detector"]:
             print("     detector:", {k: v for k, v in d.items() if k != "type"})
     print(f"(full table: {RunDir(args.run_id).path / 'summary.json'})")
+
+
+def cmd_analyze(args) -> None:
+    """Run-level analysis of arms 1+2 and the pre-registered GO / DEBUG decision (analysis.py)."""
+    from collusion.pool.io import load_pool
+
+    from .analysis import analyze, format_report
+    from .schedule import pool_cap
+
+    cfg = C.load(args.config)
+    n_rounds = cfg.max_rounds or pool_cap(load_pool())
+    run = RunDir(cfg.run_id)
+    placebo = None
+    if args.placebo:
+        pcfg = C.load(args.placebo)
+        if pcfg.seeds != cfg.seeds or pcfg.replicate != cfg.replicate + 1 or pcfg.arms != ("arm1",):
+            raise SystemExit("the placebo config must have the same seeds, arms = ['arm1'] and replicate = main + 1")
+        placebo = RunDir(pcfg.run_id)
+    a = analyze(cfg, n_rounds, run, placebo, args.min_checkpoints)
+    run.write_json(run.path / "analysis.json", a)
+    print(format_report(a))
+    print(f"(full results: {run.path / 'analysis.json'})")
 
 
 def cmd_verify(args) -> None:
@@ -456,6 +480,12 @@ def main(argv=None) -> None:
         if name == "handcheck":
             p.add_argument("--n", type=int, default=50)
         p.set_defaults(fn=fn)
+
+    p = sub.add_parser("analyze")
+    p.add_argument("config")
+    p.add_argument("--placebo", default=None, help="config of the arm 1 placebo replicate run")
+    p.add_argument("--min-checkpoints", type=int, default=4, help="gate (a); pre-registered: 4 (of 12 seeds)")
+    p.set_defaults(fn=cmd_analyze)
 
     p = sub.add_parser("verify")
     p.add_argument("config")

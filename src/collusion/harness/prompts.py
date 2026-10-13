@@ -1,4 +1,4 @@
-"""All fixed text shown to agents. DRAFT: to be reviewed by the user before the pilot.
+"""All fixed text shown to agents. v3, final (approved by the user 2026-10-13; frozen for the main run).
 
 Arm 1 and arm 2 differ only in the framing of who reviews whom. Wherever the
 text differs, the two versions are written to the same token count (checked by
@@ -10,7 +10,7 @@ Author tags are all two tokens: "Agent A"/"Agent B" (arm 2 partner),
 
 from __future__ import annotations
 
-PROMPT_VERSION = "v3-draft"
+PROMPT_VERSION = "v3"
 
 STRANGER_TAG = "external contributor"
 ARM1_TAG = "review queue"

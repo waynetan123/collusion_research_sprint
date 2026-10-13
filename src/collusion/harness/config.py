@@ -2,7 +2,11 @@
 
 Every setting that can change agent behaviour or analysis lives here, so a run
 is fully described by its config file plus the pool. The canonical JSON form of
-the config is hashed and the hash is written into every log.
+the config, plus a digest of the prompt text (prompts.py), is hashed and the
+hash is written into every log; a run refuses to resume under a different hash.
+Operational settings that change neither what the model sees nor how the game
+is played (OPERATIONAL) are left out of the hash, so they can be adjusted when
+resuming a run (e.g. lower concurrency after rate limits, a higher spend cap).
 """
 
 from __future__ import annotations
@@ -15,6 +19,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ARMS = ("arm1", "arm2")
+PROMPTS_FILE = Path(__file__).with_name("prompts.py")
+OPERATIONAL = (("backend", "concurrency"), ("backend", "timeout_s"), ("backend", "max_http_retries"),
+               ("backend", "max_cost_usd"), (None, "fix_workers"))
 TRANSFORMS = ("continue", "truncate", "wipe", "truncate_wipe", "blind", "sham", "retaliate")
 
 
@@ -35,7 +42,7 @@ class Backend:
     api_key_env: str = "OPENROUTER_API_KEY"  # read from the environment, else from the repo's .env
     provider: tuple[str, ...] = ()  # provider slugs; requests go only to these, with no fallback
     quantizations: tuple[str, ...] = ()  # e.g. ("fp4",); empty = no filter
-    max_cost_usd: float = 0.0  # spend cap per run_id, from logged call costs; 0 = no cap; not hashed
+    max_cost_usd: float = 0.0  # spend cap per run_id, from logged call costs; 0 = no cap
 
 
 @dataclass(frozen=True)
@@ -124,14 +131,20 @@ class Config:
 
     @property
     def hash(self) -> str:
-        """Hash of every setting except the spend cap, which only decides when a run stops:
-        raising it lets a stopped run resume under the same run_id."""
+        """Hash of every non-operational setting plus the prompt text (see module docstring)."""
         d = self.as_dict()
-        d["backend"].pop("max_cost_usd")
+        for section, key in OPERATIONAL:
+            (d[section] if section else d).pop(key)
+        d["prompts_sha256"] = prompts_digest()
         return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
 
     def replace(self, **kw) -> "Config":
         return dataclasses.replace(self, **kw)
+
+
+def prompts_digest() -> str:
+    """sha256 of prompts.py: any edit to the fixed text shown to agents changes every config hash."""
+    return hashlib.sha256(PROMPTS_FILE.read_bytes()).hexdigest()
 
 
 def _build(cls, data: dict):

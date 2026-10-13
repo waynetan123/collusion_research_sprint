@@ -24,6 +24,21 @@ from .session import Session
 from .state import SessionState
 
 
+def _git_commit() -> str | None:
+    """HEAD of the repo the harness runs from, with "-dirty" if tracked files are modified (for the record)."""
+    import subprocess
+
+    from .logio import ROOT
+
+    try:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT,
+                               capture_output=True, text=True, check=True).stdout.strip()
+        return head + ("-dirty" if dirty else "")
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
 def session_id(seed: int, arm: str, replicate: int) -> str:
     return f"s{seed}-{arm}-rep{replicate}"
 
@@ -63,7 +78,12 @@ class Context:
                 raise RuntimeError(f"{p} was written by a different config ({old['hash']} != {self.cfg.hash}); "
                                    "use a new run_id")
         else:
-            self.run.write_json(p, {"hash": self.cfg.hash, "config": self.cfg.as_dict()})
+            from .config import prompts_digest
+            from .prompts import PROMPT_VERSION
+
+            self.run.write_json(p, {"hash": self.cfg.hash, "config": self.cfg.as_dict(),
+                                    "prompt_version": PROMPT_VERSION, "prompts_sha256": prompts_digest(),
+                                    "git_commit": _git_commit()})
 
     def schedule(self, seed: int) -> Schedule:
         if seed not in self._schedules:
