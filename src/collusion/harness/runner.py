@@ -4,6 +4,10 @@ Arm 1 and arm 2 of a seed share the schedule and advance one round at a time
 together, so the detector compares them at the same rounds. Arm 1 runs to the
 round cap; arm 2 stops at a confirmed checkpoint or at the deadline
 (cap - arm3_rounds). Sessions resume from their last snapshot.
+
+Forced collusion (pact.rounds > 0, docs/step7_decisions.md): arm 2 runs alone
+with the pact in its prompt and checkpoints after round pact.rounds, with no
+detector; its matched arm 1 sessions live in `matched_run`.
 """
 
 from __future__ import annotations
@@ -49,8 +53,8 @@ def session_id(seed: int, arm: str, replicate: int) -> str:
     return f"s{seed}-{arm}-rep{replicate}"
 
 
-def branch_id(parent: str, transform: str, k: int) -> str:
-    return f"{parent}~{transform}@{k}"
+def branch_id(parent: str, transform: str, k: int, keep_pact: bool = False) -> str:
+    return f"{parent}~{transform}{'+pact' if keep_pact else ''}@{k}"
 
 
 class Context:
@@ -67,6 +71,8 @@ class Context:
         self.n_rounds = cfg.max_rounds or self.cap
         if self.n_rounds > self.cap:
             raise ValueError(f"max_rounds {self.n_rounds} > pool cap {self.cap}")
+        if cfg.pact.rounds and cfg.pact.rounds + cfg.arm3_rounds > self.n_rounds:
+            raise ValueError(f"pact.rounds + arm3_rounds > {self.n_rounds} rounds: arm 3 would not fit after the pact")
         self.tokenizer = tokenizer
         # Spending already logged in this run counts toward the spend cap (resume).
         self.backend = make_backend(cfg, tokenizer, spent=run_cost(self.run))
@@ -113,6 +119,7 @@ class Context:
         if st is None:
             st = SessionState.new(sid, self.cfg.run_id, seed, arm, self.cfg.replicate, last_round,
                                   self.cfg.hash, sched.hash)
+            st.pact = arm == "arm2" and self.cfg.pact.rounds > 0
             self.run.save_state(st)  # round-0 snapshot: lets `verify` re-render round 1
         else:
             self.run.drop_unfinished(sid, st.round_done)
@@ -125,21 +132,34 @@ class Context:
         self._lock.close()
 
 
+def _forced_checkpoint(ctx: Context, st: SessionState) -> int:
+    """Forced collusion: arm 2 checkpoints once its pact rounds are played (idempotent on resume)."""
+    if st.status == "done":
+        st.status = "checkpointed"
+        ctx.run.save_state(st)
+    if not any(e["event"] == "checkpoint" for e in ctx.run.events(st.session_id, "detector")):
+        ctx.run.append(st.session_id, [{"type": "detector", "round": st.round_done, "event": "checkpoint",
+                                        "forced": True}])
+    return st.round_done
+
+
 async def run_seed(ctx: Context, seed: int, progress=None) -> dict:
     cfg = ctx.cfg
     rep = cfg.replicate
     deadline = max(1, ctx.n_rounds - cfg.arm3_rounds)
+    pact = cfg.pact.rounds
     sessions = {}
     if "arm1" in cfg.arms:
         sessions["arm1"] = ctx.open_session(session_id(seed, "arm1", rep), seed, "arm1", ctx.n_rounds)
     if "arm2" in cfg.arms:
-        if "arm1" not in cfg.arms:
+        if "arm1" not in cfg.arms and not pact:
             raise ValueError("arm 2 needs the matched arm 1 session in the same run")
-        sessions["arm2"] = ctx.open_session(session_id(seed, "arm2", rep), seed, "arm2", min(deadline, ctx.n_rounds))
+        last = pact or min(deadline, ctx.n_rounds)
+        sessions["arm2"] = ctx.open_session(session_id(seed, "arm2", rep), seed, "arm2", last)
 
     det = None
     hist: dict[str, dict[int, dict]] = {}
-    if "arm2" in sessions:
+    if "arm2" in sessions and not pact:
         # Rebuild per-round partner outcomes and the detector from logs (resume).
         for arm, s in sessions.items():
             hist[arm] = D.outcomes_from_events(ctx.run.events(s.state.session_id, "round"))
@@ -177,11 +197,12 @@ async def run_seed(ctx: Context, seed: int, progress=None) -> dict:
             ctx.run.save_state(a2)
             ctx.run.append(a2.session_id, [{"type": "detector", "round": a2.round_done, "event": "no_collusion"}])
 
+    checkpoint = _forced_checkpoint(ctx, sessions["arm2"].state) if pact else det.checkpoint if det else None
     _report(progress, seed, sessions)  # final statuses (checkpointed / deadline)
     for s in sessions.values():
         await s.drain()
     return {arm: {"session": s.state.session_id, "round_done": s.state.round_done, "status": s.state.status}
-            for arm, s in sessions.items()} | ({"checkpoint": det.checkpoint} if det else {})
+            for arm, s in sessions.items()} | ({"checkpoint": checkpoint} if det or pact else {})
 
 
 async def _gather_or_cancel(coros) -> list:
@@ -211,29 +232,63 @@ def checkpoint_round(ctx: Context, parent_sid: str) -> int:
     return evs[-1]["round"]
 
 
-async def run_branches(ctx: Context, parent_sid: str, k: int, transforms: list[str], progress=None) -> dict:
+def checkpointed_parents(ctx: Context) -> list[tuple[str, int]]:
+    """(session, checkpoint round) of every checkpointed arm 2 session of this run's replicate."""
+    out = []
+    for sid in ctx.run.sessions():
+        st = ctx.run.load_state(sid)
+        if st.arm == "arm2" and st.transform is None and st.replicate == ctx.cfg.replicate and st.status == "checkpointed":
+            out.append((sid, checkpoint_round(ctx, sid)))
+    return out
+
+
+def _branch_sessions(ctx: Context, parent_sid: str, k: int, transforms: list[str], keep_pact: bool):
     parent = ctx.run.snapshot(parent_sid, k)
     sched = ctx.schedule(parent.seed)
     sessions, reports = [], {}
     for t in transforms:
-        sid = branch_id(parent_sid, t, k)
+        sid = branch_id(parent_sid, t, k, keep_pact)
         st = ctx.run.load_state(sid)
         if st is None:
-            st, rep = make_branch(parent, t, sid, sched, ctx.pool, ctx.cfg, ctx.tokenizer, ctx.n_rounds)
+            st, rep = make_branch(parent, t, sid, sched, ctx.pool, ctx.cfg, ctx.tokenizer, ctx.n_rounds, keep_pact)
             ctx.run.save_state(st)
             ctx.run.append(sid, [{"type": "branch", "round": k, **rep}])
             reports[t] = rep
         else:
             ctx.run.drop_unfinished(sid, st.round_done)
         sessions.append(Session(st, sched, ctx.pool, ctx.cfg, ctx.backend, ctx.run, ctx.fixtester))
+    return parent.seed, sessions, reports
 
-    async def drive(s: Session):
+
+def _bar_name(s: Session) -> str:
+    return s.state.transform + ("+pact" if s.state.pact else "")
+
+
+async def _drive(sessions: list[tuple[int, Session]], progress) -> None:
+    async def drive(seed: int, s: Session):
         while not s.done:
             await s.play_round()
-            _report(progress, parent.seed, {s.state.transform: s})
+            _report(progress, seed, {_bar_name(s): s})
         await s.drain()
 
-    _report(progress, parent.seed, {s.state.transform: s for s in sessions})
+    for seed, s in sessions:
+        _report(progress, seed, {_bar_name(s): s})
+    await _gather_or_cancel(drive(seed, s) for seed, s in sessions)
 
-    await _gather_or_cancel(drive(s) for s in sessions)
+
+async def run_branches(ctx: Context, parent_sid: str, k: int, transforms: list[str], progress=None,
+                       keep_pact: bool = False) -> dict:
+    seed, sessions, reports = _branch_sessions(ctx, parent_sid, k, transforms, keep_pact)
+    await _drive([(seed, s) for s in sessions], progress)
     return {"reports": reports, "sessions": {s.state.transform: s.state.round_done for s in sessions}}
+
+
+async def run_all_branches(ctx: Context, transforms: list[str], progress=None, keep_pact: bool = False) -> dict:
+    """Branch every checkpointed arm 2 session of the run at its checkpoint, all at once."""
+    parents = checkpointed_parents(ctx)
+    if not parents:
+        raise ValueError(f"run {ctx.cfg.run_id} has no checkpointed arm 2 sessions")
+    made = [(sid, k, *_branch_sessions(ctx, sid, k, transforms, keep_pact)) for sid, k in parents]
+    await _drive([(seed, s) for _, _, seed, sessions, _ in made for s in sessions], progress)
+    return {sid: {"checkpoint": k, "sessions": {s.state.transform: s.state.round_done for s in sessions}}
+            for sid, k, _, sessions, _ in made}

@@ -55,11 +55,12 @@ class Session:
     def _truth(self, rd, agent: str) -> dict:
         """Ground truth for the fake backend (never sent to a real model)."""
         labels = {}
+        tags = render.slot_tags(self.state.arm, agent, render.is_blind(self.state, rd.round))
         for lb in LABELS:
             slot = rd.label_slot(agent, lb)
             rec = self.pool[rd.deals[slot].fn_id]
             labels[lb] = {"slot": slot, "partner": slot == PARTNER[agent], "buggy": rd.deals[slot].buggy,
-                          "clean_code": rec["clean_code"], "entry_point": rec["entry_point"]}
+                          "tag": tags[slot], "clean_code": rec["clean_code"], "entry_point": rec["entry_point"]}
         ledger = self.state.agents[agent].ledger
         return {"labels": labels, "last_received": ledger[-1].received if ledger else None}
 

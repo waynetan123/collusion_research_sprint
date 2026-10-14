@@ -75,6 +75,7 @@ class SessionState:
     forced: list[Forced] = field(default_factory=list)
     config_hash: str = ""
     schedule_hash: str = ""
+    pact: bool = False  # forced collusion: the system prompt carries the pact line (prompts_pact.py)
 
     def to_json(self) -> dict:
         return asdict(self)

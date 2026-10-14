@@ -20,6 +20,11 @@ shorter than the marker (e.g. a one-word note) cannot shrink to fit, so its
 deficit is taken from the filler of the longest spans; the invariant asserted
 is that the full prompt's token count is unchanged. The padded text is stored
 in the state, so later rendering needs no tokenizer.
+
+Forced collusion (docs/step7_decisions.md): every branch drops the pact line
+from the system prompt unless `keep_pact` is set, the continue branch
+included. Token counts are therefore matched against the parent with the
+branch's pact setting (the continue branch), not the parent as it was.
 """
 
 from __future__ import annotations
@@ -91,23 +96,30 @@ def pad_redactions(state: SessionState, parent: SessionState, fields: tuple[str,
 
 
 def make_branch(parent: SessionState, transform: str, new_sid: str, schedule: Schedule, pool: dict, cfg,
-                tokenizer=None, max_round: int | None = None) -> tuple[SessionState, dict]:
+                tokenizer=None, max_round: int | None = None, keep_pact: bool = False) -> tuple[SessionState, dict]:
     k = parent.round_done
     max_round = min(max_round or schedule.n_rounds, schedule.n_rounds)
     if k >= max_round:
         raise ValueError(f"cannot branch after the last round ({k})")
+    if keep_pact and not parent.pact:
+        raise ValueError("keep_pact needs a parent whose prompt has the pact (a forced-collusion run)")
     st = SessionState.from_json(parent.to_json())
     st.session_id, st.parent, st.branch_round, st.transform = new_sid, parent.session_id, k, transform
     st.status = "running"
+    st.pact = keep_pact
     n = cfg.retaliation_rounds if transform == "retaliate" else cfg.arm3_rounds
     st.last_round = min(k + n, max_round)
     rd_next = schedule[k + 1]
-    report: dict = {"transform": transform, "branch_round": k, "last_round": st.last_round}
+    # What the continue branch would see: the reference for token matching.
+    ref = SessionState.from_json(parent.to_json())
+    ref.pact = keep_pact
+    report: dict = {"transform": transform, "branch_round": k, "last_round": st.last_round, "pact": st.pact,
+                    "pact_removed": parent.pact and not st.pact}
 
     if transform in REDACTING:
         if tokenizer is None:
             raise ValueError("redacting branches need a tokenizer")
-        report["tokens"] = pad_redactions(st, parent, REDACTING[transform], k, tokenizer, rd_next, pool, cfg.game)
+        report["tokens"] = pad_redactions(st, ref, REDACTING[transform], k, tokenizer, rd_next, pool, cfg.game)
     elif transform == "blind":
         st.blind_from = k + 1
     elif transform == "sham":
@@ -125,8 +137,9 @@ def make_branch(parent: SessionState, transform: str, new_sid: str, schedule: Sc
         raise ValueError(f"unknown transform {transform!r}")
 
     if tokenizer is not None:
+        # "parent": the parent with the branch's pact setting (identical to the parent unless the pact was dropped).
         report["prompt_tokens_next"] = {
-            a: {"parent": _prompt_tokens(tokenizer, parent, a, rd_next, pool, cfg.game),
+            a: {"parent": _prompt_tokens(tokenizer, ref, a, rd_next, pool, cfg.game),
                 "branch": _prompt_tokens(tokenizer, st, a, rd_next, pool, cfg.game)} for a in AGENTS}
         if transform in ("continue", "blind", "retaliate", *REDACTING):
             for a, v in report["prompt_tokens_next"].items():

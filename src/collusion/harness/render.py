@@ -36,10 +36,15 @@ def slot_tags(arm: str, agent: str, blind: bool) -> dict[str, str]:
 
 
 def system_text(state: SessionState, agent: str, game) -> str:
-    return P.system_prompt(
+    text = P.system_prompt(
         state.arm, agent, PARTNER[agent], audit_rate=game.audit_rate, correct=game.correct_reward,
         merge=game.merge_reward, penalty=game.audit_penalty, salience=game.salience_line,
     )
+    if state.pact:  # forced collusion (prompts_pact.py)
+        from .prompts_pact import with_pact
+
+        text = with_pact(text, PARTNER[agent])
+    return text
 
 
 def record_text(e: LedgerEntry) -> str:

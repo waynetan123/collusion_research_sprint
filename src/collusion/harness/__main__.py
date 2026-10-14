@@ -1,10 +1,12 @@
 """Harness command line.
 
   python -m collusion.harness run CONFIG [--no-fixtest] [--fix-mode call|batch]
-  python -m collusion.harness branch CONFIG --session SID [--round K] [--transforms t1,t2,...]
+  python -m collusion.harness branch CONFIG (--session SID [--round K] | --all) [--transforms t1,t2,...] [--keep-pact]
   python -m collusion.harness summary RUN_ID
   python -m collusion.harness analyze CONFIG [--placebo PLACEBO_CONFIG] [--min-checkpoints 4]
                                                         (arms 1+2: per-seed outcomes, gates, GO / DEBUG)
+  python -m collusion.harness analyze-arm3 CONFIG [--keep-pact]
+                                                        (arm 3: branches vs continue and matched arm 1, labels)
   python -m collusion.harness verify CONFIG
   python -m collusion.harness fixtest CONFIG            (backfill untested fixes)
   python -m collusion.harness judge RUN_ID [--limit N]
@@ -135,20 +137,24 @@ def cmd_run(args) -> None:
 
 def cmd_branch(args) -> None:
     from .backend import BudgetExceeded, OutOfCredit
-    from .runner import Context, checkpoint_round, run_branches
+    from .runner import Context, checkpoint_round, run_all_branches, run_branches
 
     cfg = C.load(args.config)
     transforms = args.transforms.split(",") if args.transforms else DEFAULT_ARM3
     bad = set(transforms) - set(C.TRANSFORMS)
     if bad:
         raise SystemExit(f"unknown transforms {sorted(bad)}")
+    if args.all and args.round is not None:
+        raise SystemExit("--all branches every session at its own checkpoint; --round needs --session")
     ctx = Context(cfg, _tokenizer(required=True, cfg=cfg), fix_testing=not args.no_fixtest, fix_mode=args.fix_mode)
-    k = args.round if args.round is not None else checkpoint_round(ctx, args.session)
     prog = _progress(ctx)
 
     async def go():
         try:
-            return await _ticking(prog, run_branches(ctx, args.session, k, transforms, prog))
+            if args.all:
+                return await _ticking(prog, run_all_branches(ctx, transforms, prog, args.keep_pact))
+            k = args.round if args.round is not None else checkpoint_round(ctx, args.session)
+            return await _ticking(prog, run_branches(ctx, args.session, k, transforms, prog, args.keep_pact))
         finally:
             await ctx.close()
 
@@ -160,6 +166,10 @@ def cmd_branch(args) -> None:
         raise SystemExit(2)
     prog.close()
     print(json.dumps(res, indent=1))
+    if cfg.backend.kind == "openrouter":
+        from .report import run_cost
+
+        print(f"cost: ${run_cost(ctx.run):.4f} logged in run {cfg.run_id}")
 
 
 def cmd_summary(args) -> None:
@@ -185,6 +195,8 @@ def cmd_analyze(args) -> None:
     from .schedule import pool_cap
 
     cfg = C.load(args.config)
+    if cfg.pact.rounds:
+        raise SystemExit("a forced-collusion run has no arm 1 or detector to analyse: use analyze-arm3")
     n_rounds = cfg.max_rounds or pool_cap(load_pool())
     run = RunDir(cfg.run_id)
     placebo = None
@@ -197,6 +209,19 @@ def cmd_analyze(args) -> None:
     run.write_json(run.path / "analysis.json", a)
     print(format_report(a))
     print(f"(full results: {run.path / 'analysis.json'})")
+
+
+def cmd_analyze_arm3(args) -> None:
+    """Arm 3: post-branch outcomes, branch vs continue and vs matched arm 1, labels (arm3.py)."""
+    from .arm3 import analyze_arm3, format_arm3
+
+    cfg = C.load(args.config)
+    run = RunDir(cfg.run_id)
+    a = analyze_arm3(cfg, run, RunDir(cfg.matched_run or cfg.run_id), args.keep_pact)
+    out = run.path / f"arm3_analysis{'_keep_pact' if args.keep_pact else ''}.json"
+    run.write_json(out, a)
+    print(format_arm3(a))
+    print(f"(full results: {out})")
 
 
 def cmd_verify(args) -> None:
@@ -482,9 +507,13 @@ def main(argv=None) -> None:
 
     p = sub.add_parser("branch")
     p.add_argument("config")
-    p.add_argument("--session", required=True)
+    which = p.add_mutually_exclusive_group(required=True)
+    which.add_argument("--session")
+    which.add_argument("--all", action="store_true", help="every checkpointed arm 2 session, at its checkpoint")
     p.add_argument("--round", type=int, default=None, help="default: the session's confirmed checkpoint")
     p.add_argument("--transforms", default=None, help=f"comma-separated; default {','.join(DEFAULT_ARM3)}")
+    p.add_argument("--keep-pact", action="store_true",
+                   help="forced collusion: keep the pact line in the branches (default: removed in every branch)")
     p.add_argument("--no-fixtest", action="store_true")
     p.add_argument("--fix-mode", default="call", choices=["call", "batch"])
     p.set_defaults(fn=cmd_branch)
@@ -504,6 +533,11 @@ def main(argv=None) -> None:
     p.add_argument("--placebo", default=None, help="config of the arm 1 placebo replicate run")
     p.add_argument("--min-checkpoints", type=int, default=4, help="gate (a); pre-registered: 4 (of 12 seeds)")
     p.set_defaults(fn=cmd_analyze)
+
+    p = sub.add_parser("analyze-arm3")
+    p.add_argument("config")
+    p.add_argument("--keep-pact", action="store_true", help="analyse the branches made with --keep-pact")
+    p.set_defaults(fn=cmd_analyze_arm3)
 
     p = sub.add_parser("verify")
     p.add_argument("config")

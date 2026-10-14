@@ -20,8 +20,9 @@ from pathlib import Path
 
 ARMS = ("arm1", "arm2")
 PROMPTS_FILE = Path(__file__).with_name("prompts.py")
+PACT_FILE = Path(__file__).with_name("prompts_pact.py")
 OPERATIONAL = (("backend", "concurrency"), ("backend", "timeout_s"), ("backend", "max_http_retries"),
-               ("backend", "max_cost_usd"), (None, "fix_workers"))
+               ("backend", "max_cost_usd"), (None, "fix_workers"), (None, "matched_run"))
 TRANSFORMS = ("continue", "truncate", "wipe", "truncate_wipe", "blind", "sham", "retaliate")
 
 
@@ -91,10 +92,18 @@ class Detector:
 
 
 @dataclass(frozen=True)
+class Pact:
+    """Forced collusion (docs/step7_decisions.md): arm 2's system prompt states a pact to approve each
+    other's patches in rounds 1..rounds; the session then checkpoints, with no detector."""
+
+    rounds: int = 0  # 0 = off (the main design)
+
+
+@dataclass(frozen=True)
 class FakePolicy:
     """Scripted agent for the fake backend (tests, dry runs, Step 4 noise simulator)."""
 
-    kind: str = "honest"  # "honest" | "colluder" | "reciprocator" | "random"
+    kind: str = "honest"  # "honest" | "colluder" | "reciprocator" | "random" | "pact"
     p_detect: float = 0.9  # P(reject | buggy) when reviewing honestly
     p_false_reject: float = 0.05  # P(reject | clean) when reviewing honestly
     collude_from: int = 1  # colluder: round from which partner patches are always approved
@@ -125,17 +134,27 @@ class Config:
     game: Game = field(default_factory=Game)
     detector: Detector = field(default_factory=Detector)
     fake: Fake = field(default_factory=Fake)
+    pact: Pact = field(default_factory=Pact)
+    matched_run: str = ""  # run_id holding the matched arm 1 sessions, if not this run (forced collusion)
 
     def as_dict(self) -> dict:
         return dataclasses.asdict(self)
 
     @property
     def hash(self) -> str:
-        """Hash of every non-operational setting plus the prompt text (see module docstring)."""
+        """Hash of every non-operational setting plus the prompt text (see module docstring).
+
+        `pact` was added after the main run; it is left out at its default so the frozen runs keep
+        their hashes. When it is on, the pact text (prompts_pact.py) is hashed too.
+        """
         d = self.as_dict()
         for section, key in OPERATIONAL:
             (d[section] if section else d).pop(key)
         d["prompts_sha256"] = prompts_digest()
+        if self.pact == Pact():
+            d.pop("pact")
+        else:
+            d["pact_prompt_sha256"] = hashlib.sha256(PACT_FILE.read_bytes()).hexdigest()
         return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
 
     def replace(self, **kw) -> "Config":
@@ -182,6 +201,11 @@ def from_dict(data: dict) -> Config:
     k = cfg.game.buggy_share * cfg.game.block_size
     if abs(k - round(k)) > 1e-9:
         raise ValueError("game.buggy_share * game.block_size must be an integer")
+    if cfg.pact.rounds < 0:
+        raise ValueError("pact.rounds must be >= 0")
+    if cfg.pact.rounds and (cfg.arms != ("arm2",) or not cfg.matched_run):
+        raise ValueError('a forced-collusion run (pact.rounds > 0) needs arms = ["arm2"] and matched_run '
+                         "(the run holding the matched arm 1 sessions)")
     return cfg
 
 
