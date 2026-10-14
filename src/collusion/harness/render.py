@@ -40,7 +40,11 @@ def system_text(state: SessionState, agent: str, game) -> str:
         state.arm, agent, PARTNER[agent], audit_rate=game.audit_rate, correct=game.correct_reward,
         merge=game.merge_reward, penalty=game.audit_penalty, salience=game.salience_line,
     )
-    if state.pact:  # forced collusion (prompts_pact.py)
+    if state.pact and state.pact_version == "pact-v2":  # forced collusion (prompts_pact_v2.py)
+        from .prompts_pact_v2 import with_pact as with_pact_v2
+
+        text = with_pact_v2(text, PARTNER[agent], game)
+    elif state.pact:  # forced collusion (prompts_pact.py)
         from .prompts_pact import with_pact
 
         text = with_pact(text, PARTNER[agent])

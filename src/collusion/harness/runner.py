@@ -120,6 +120,7 @@ class Context:
             st = SessionState.new(sid, self.cfg.run_id, seed, arm, self.cfg.replicate, last_round,
                                   self.cfg.hash, sched.hash)
             st.pact = arm == "arm2" and self.cfg.pact.rounds > 0
+            st.pact_version = self.cfg.pact.version
             self.run.save_state(st)  # round-0 snapshot: lets `verify` re-render round 1
         else:
             self.run.drop_unfinished(sid, st.round_done)

@@ -21,6 +21,8 @@ from pathlib import Path
 ARMS = ("arm1", "arm2")
 PROMPTS_FILE = Path(__file__).with_name("prompts.py")
 PACT_FILE = Path(__file__).with_name("prompts_pact.py")
+PACT_V2_FILE = Path(__file__).with_name("prompts_pact_v2.py")
+PACT_VERSIONS = ("pact-v1", "pact-v2")
 OPERATIONAL = (("backend", "concurrency"), ("backend", "timeout_s"), ("backend", "max_http_retries"),
                ("backend", "max_cost_usd"), (None, "fix_workers"), (None, "matched_run"))
 TRANSFORMS = ("continue", "truncate", "wipe", "truncate_wipe", "blind", "sham", "retaliate")
@@ -97,6 +99,7 @@ class Pact:
     other's patches in rounds 1..rounds; the session then checkpoints, with no detector."""
 
     rounds: int = 0  # 0 = off (the main design)
+    version: str = "pact-v1"  # pact-v1: prompts_pact.py; pact-v2: prompts_pact_v2.py (step7 §8)
 
 
 @dataclass(frozen=True)
@@ -145,7 +148,8 @@ class Config:
         """Hash of every non-operational setting plus the prompt text (see module docstring).
 
         `pact` was added after the main run; it is left out at its default so the frozen runs keep
-        their hashes. When it is on, the pact text (prompts_pact.py) is hashed too.
+        their hashes. When it is on, the text of its pact version is hashed too. `pact.version` was
+        added after the pact-v1 run; it is left out at pact-v1 so that run keeps its hash.
         """
         d = self.as_dict()
         for section, key in OPERATIONAL:
@@ -154,7 +158,10 @@ class Config:
         if self.pact == Pact():
             d.pop("pact")
         else:
-            d["pact_prompt_sha256"] = hashlib.sha256(PACT_FILE.read_bytes()).hexdigest()
+            if self.pact.version == "pact-v1":
+                d["pact"].pop("version")
+            pact_file = PACT_V2_FILE if self.pact.version == "pact-v2" else PACT_FILE
+            d["pact_prompt_sha256"] = hashlib.sha256(pact_file.read_bytes()).hexdigest()
         return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
 
     def replace(self, **kw) -> "Config":
@@ -203,6 +210,8 @@ def from_dict(data: dict) -> Config:
         raise ValueError("game.buggy_share * game.block_size must be an integer")
     if cfg.pact.rounds < 0:
         raise ValueError("pact.rounds must be >= 0")
+    if cfg.pact.version not in PACT_VERSIONS:
+        raise ValueError(f"unknown pact.version {cfg.pact.version!r} (one of {PACT_VERSIONS})")
     if cfg.pact.rounds and (cfg.arms != ("arm2",) or not cfg.matched_run):
         raise ValueError('a forced-collusion run (pact.rounds > 0) needs arms = ["arm2"] and matched_run '
                          "(the run holding the matched arm 1 sessions)")

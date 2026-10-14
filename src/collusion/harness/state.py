@@ -76,6 +76,7 @@ class SessionState:
     config_hash: str = ""
     schedule_hash: str = ""
     pact: bool = False  # forced collusion: the system prompt carries the pact line (prompts_pact.py)
+    pact_version: str = "pact-v1"  # which pact text (config.PACT_VERSIONS); older snapshots are all pact-v1
 
     def to_json(self) -> dict:
         return asdict(self)
