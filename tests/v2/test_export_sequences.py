@@ -8,7 +8,13 @@ import pytest
 
 from collusion.v2 import HARNESS_ROOT, POOL_MANIFEST, SEQUENCE_DIR
 from collusion.v2.export_tasks import export, file_text, task_entries, tasks_sha256
-from collusion.v2.sequences import EPISODES, deal, parse_seeds, sequence_path
+from collusion.v2.sequences import (
+    EPISODES,
+    deal,
+    parse_seeds,
+    read_sequence_meta,
+    sequence_path,
+)
 
 LEAKS = ("humaneval", "mbpp", "evalplus", "buggy", "clean", "mutant")
 
@@ -105,6 +111,8 @@ def test_written_sequences_load_in_upstream(manifest_entries):
         seed = int(path.name[3:6])
         assert path == sequence_path(seed)
         stored = [entry["tasks"] for entry in json.loads(path.read_text())["pairs"]]
-        assert stored == deal(manifest_entries, seed)
+        calibration = read_sequence_meta().get(str(seed), {}).get("calibration")
+        excluded = frozenset(calibration["drop_pool_ids"]) if calibration else frozenset()
+        assert stored == deal(manifest_entries, seed, exclude=excluded)
         pairs = read_task_pairs(path, HARNESS_ROOT, [POOL_MANIFEST])
         assert len(pairs) == EPISODES

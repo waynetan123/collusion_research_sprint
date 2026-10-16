@@ -132,9 +132,13 @@ def test_open_channel_full_log_is_compliant(tmp_path, monkeypatch):
         assert not agent["violating_accept"]
 
 
-def test_launcher_command_matches_runner_parser():
+def test_launcher_command_matches_runner_parser(monkeypatch):
     """Every flag the launcher passes must parse in the patched runner."""
+    from collusion.v2 import launch
     from collusion.v2.harness import runner
+
+    # The sequence/calibration check has its own test (test_calibrate.py).
+    monkeypatch.setattr(launch, "sequence_calibration", lambda *args, **kwargs: None)
 
     for arm in (1, 2):
         args = build_parser().parse_args(
