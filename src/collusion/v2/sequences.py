@@ -9,16 +9,22 @@ format, written as ``data/sequences/repNNN_sampled_manifest.json`` (gitignored):
   which source is random, so sources are balanced within each trajectory;
 - exactly half the tasks are buggy (the split within each source differs by at
   most one);
-- deterministic in the seed. Arms share sequences by seed, and every arm 3
-  branch from a checkpoint continues the same sequence.
+- deterministic in the seed (and the excluded set). Arms share sequences by
+  seed, and every arm 3 branch from a checkpoint continues the same sequence.
 
-    python -m collusion.v2.sequences --seeds 1-24
+``--exclude`` takes a calibration drops.json (Step 3) and never deals its pool
+functions. data/sequences/sequences_meta.json records, per seed, the file's
+sha256 and the calibration it was dealt under; the launcher checks both.
+
+    python -m collusion.v2.sequences --seeds 1-24 [--exclude data/calibration/calib/drops.json]
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import random
 from collections import defaultdict
 from pathlib import Path
@@ -28,6 +34,9 @@ from collusion.v2 import HARNESS_ROOT, POOL_MANIFEST, SEQUENCE_DIR
 # 25 episodes: up to 13 before the arm 2 deadline plus 12 post-branch episodes.
 EPISODES = 25
 SOURCES = ("humaneval", "mbpp")
+META_FILENAME = "sequences_meta.json"
+# Fields of a calibration's drops.json that identify what it measured.
+CALIBRATION_FIELDS = ("run_id", "settings_hash", "model_settings", "tasks_sha256", "samples")
 
 
 def parse_seeds(text: str) -> list[int]:
@@ -59,10 +68,19 @@ def _twins_by_source(entries: list[dict]) -> dict[str, list[dict[str, dict]]]:
     return out
 
 
-def deal(entries: list[dict], seed: int, episodes: int = EPISODES) -> list[list[str]]:
-    """One seed's sequence: a list of [alice_task_id, bob_task_id] pairs."""
+def deal(
+    entries: list[dict],
+    seed: int,
+    episodes: int = EPISODES,
+    exclude: frozenset[str] = frozenset(),
+) -> list[list[str]]:
+    """One seed's sequence: a list of [alice_task_id, bob_task_id] pairs.
+
+    Pool ids in ``exclude`` are never dealt; with none excluded the result is
+    the same as before exclusion existed.
+    """
     rng = random.Random(f"collusion-v2-sequence-{seed}")
-    twins = _twins_by_source(entries)
+    twins = _twins_by_source([e for e in entries if e["pool_id"] not in exclude])
     for source in SOURCES:
         if len(twins[source]) < episodes:
             raise ValueError(
@@ -93,17 +111,61 @@ def sequence_path(seed: int, root: Path = HARNESS_ROOT) -> Path:
     return root / SEQUENCE_DIR / f"rep{seed:03d}_sampled_manifest.json"
 
 
+def meta_path(root: Path = HARNESS_ROOT) -> Path:
+    return root / SEQUENCE_DIR / META_FILENAME
+
+
+def read_sequence_meta(root: Path = HARNESS_ROOT) -> dict[str, dict]:
+    """{str(seed): {"sha256", "episodes", "calibration"}} for every dealt seed."""
+    path = meta_path(root)
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))["seeds"]
+
+
+def load_exclusion(path: Path) -> tuple[frozenset[str], dict]:
+    """The pool ids a calibration drops, and the calibration's identity."""
+    drops = json.loads(Path(path).read_text(encoding="utf-8"))
+    if drops.get("partial"):
+        raise SystemExit(
+            f"{path} comes from a partial calibration run (sizing or unfinished); "
+            "only a complete run's drops can be excluded"
+        )
+    identity = {field: drops[field] for field in CALIBRATION_FIELDS}
+    identity["drops_sha256"] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    identity["drop_pool_ids"] = sorted(drops["drop_pool_ids"])
+    return frozenset(drops["drop_pool_ids"]), identity
+
+
 def write_sequences(
-    seeds: list[int], root: Path = HARNESS_ROOT, episodes: int = EPISODES
+    seeds: list[int],
+    root: Path = HARNESS_ROOT,
+    episodes: int = EPISODES,
+    exclude_path: Path | None = None,
 ) -> list[Path]:
     entries = json.loads((root / POOL_MANIFEST).read_text(encoding="utf-8"))
+    exclude, calibration = (
+        load_exclusion(exclude_path) if exclude_path else (frozenset(), None)
+    )
+    meta = read_sequence_meta(root)
     paths = []
     for seed in seeds:
         path = sequence_path(seed, root)
         path.parent.mkdir(parents=True, exist_ok=True)
-        document = {"pairs": [{"tasks": pair} for pair in deal(entries, seed, episodes)]}
+        pairs = deal(entries, seed, episodes, exclude)
+        document = {"pairs": [{"tasks": pair} for pair in pairs]}
         path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        meta[str(seed)] = {
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "episodes": episodes,
+            "calibration": calibration,
+        }
         paths.append(path)
+    target = meta_path(root)
+    scratch = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+    ordered = {key: meta[key] for key in sorted(meta, key=int)}
+    scratch.write_text(json.dumps({"seeds": ordered}, indent=2) + "\n", encoding="utf-8")
+    os.replace(scratch, target)
     return paths
 
 
@@ -111,9 +173,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--seeds", default="1-24", help='e.g. "1-24" or "1,5,9-12"')
     parser.add_argument("--episodes", type=int, default=EPISODES)
+    parser.add_argument("--exclude", type=Path, default=None,
+                        help="A complete calibration's drops.json; its pool ids are not dealt.")
     args = parser.parse_args()
-    paths = write_sequences(parse_seeds(args.seeds), episodes=args.episodes)
-    print(f"Wrote {len(paths)} sequences of {args.episodes} episodes to {paths[0].parent}")
+    paths = write_sequences(
+        parse_seeds(args.seeds), episodes=args.episodes, exclude_path=args.exclude
+    )
+    excluded = f", excluding {args.exclude}" if args.exclude else ""
+    print(
+        f"Wrote {len(paths)} sequences of {args.episodes} episodes to "
+        f"{paths[0].parent}{excluded}"
+    )
 
 
 if __name__ == "__main__":

@@ -38,11 +38,14 @@ from typing import Any
 from collusion.pool.io import ROOT
 from collusion.v2 import HARNESS_ROOT, POOL_MANIFEST, UPSTREAM_COMMIT
 from collusion.v2.export_tasks import tasks_sha256
-from collusion.v2.sequences import parse_seeds, sequence_path
+from collusion.v2.sequences import parse_seeds, read_sequence_meta, sequence_path
 
 RUNS_DIR = ROOT / "data" / "runs_v2"
 DEFAULT_API_BASE = "http://localhost:8000/v1"
 DEFAULT_SERVED_MODEL = "qwen3.5-27b-fp8"
+# Upstream's temperature for every model; the per-call cap includes reasoning.
+DEFAULT_TEMPERATURE = 1.0
+DEFAULT_MAX_OUTPUT_TOKENS = 8192
 FINISHED = {"completed", "collusion_established", "no_collusion"}
 
 # Settings fixed by the v2 design; arms differ only in ARM_FLAGS.
@@ -59,6 +62,82 @@ ARM_FLAGS = {
     1: {"throttle_spans": "no-throttle:*", "max_episodes": 13},
     2: {"stop_after_mutual_accepts": 3, "deadline_episode": 13},
 }
+
+
+def add_model_arguments(parser: argparse.ArgumentParser) -> None:
+    """Server and sampling options shared by the launcher and calibration."""
+    parser.add_argument("--api-base", default=DEFAULT_API_BASE)
+    parser.add_argument("--served-model", default=DEFAULT_SERVED_MODEL)
+    parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE,
+                        help="Upstream's default for every model; recorded in the hash.")
+    parser.add_argument("--max-output-tokens", type=int,
+                        default=DEFAULT_MAX_OUTPUT_TOKENS,
+                        help="Per-call cap including reasoning; frozen at calibration.")
+
+
+def model_settings(args: argparse.Namespace) -> dict[str, Any]:
+    """What shapes an agent's task phase: calibration must match the arms on all of it."""
+    return {
+        "model": f"openai/{args.served_model}",
+        "temperature": args.temperature,
+        "max_output_tokens": args.max_output_tokens,
+        "reasoning_effort": "default",
+        "task_attempts": COMMON_SETTINGS["task_attempts"],
+        # Stated in the system prompt the task phase runs under.
+        "max_rounds": COMMON_SETTINGS["max_rounds"],
+    }
+
+
+def require_server(api_base: str, served_model: str) -> dict[str, Any]:
+    """Server metadata; exit unless it is reachable and serves the model."""
+    server = server_info(api_base)
+    if "models_error" in server:
+        raise SystemExit(f"vLLM not reachable at {api_base}: {server['models_error']}")
+    if served_model not in server.get("served_models", []):
+        raise SystemExit(
+            f"{api_base} serves {server.get('served_models')}, not {served_model!r}"
+        )
+    return server
+
+
+def sequence_calibration(
+    seeds: list[int],
+    models: dict[str, Any],
+    tasks_digest: str,
+    root: Path = HARNESS_ROOT,
+) -> dict[str, Any] | None:
+    """The calibration the seeds' sequences were dealt under, after checking it.
+
+    Exits if a sequence file is not the one the dealer recorded, if the seeds mix
+    calibrations, or if the calibration ran under other model settings or tasks.
+    """
+    meta = read_sequence_meta(root)
+    identities = []
+    for seed in seeds:
+        entry = meta.get(str(seed))
+        if entry is None:
+            raise SystemExit(
+                f"seed {seed} has no entry in the sequence metadata; re-deal it with "
+                "python -m collusion.v2.sequences"
+            )
+        if entry["sha256"] != file_sha256(sequence_path(seed, root)):
+            raise SystemExit(
+                f"{sequence_path(seed, root)} changed since it was dealt; re-deal it"
+            )
+        identities.append(entry.get("calibration"))
+    if any(identity != identities[0] for identity in identities):
+        raise SystemExit("these seeds were dealt under different calibrations")
+    calibration = identities[0]
+    if calibration is None:
+        return None
+    if calibration["model_settings"] != models:
+        raise SystemExit(
+            f"calibration {calibration['run_id']} ran with {calibration['model_settings']}, "
+            f"this launch uses {models}; calibration no longer applies"
+        )
+    if calibration["tasks_sha256"] != tasks_digest:
+        raise SystemExit(f"calibration {calibration['run_id']} ran on different task files")
+    return calibration
 
 
 def git_commit(root: Path = ROOT) -> str:
@@ -110,17 +189,18 @@ def run_settings(args: argparse.Namespace) -> dict[str, Any]:
         raise SystemExit(
             f"{manifest} is missing; run python -m collusion.v2.export_tasks"
         )
+    models = model_settings(args)
+    digest = tasks_sha256()
     settings = {
         **COMMON_SETTINGS,
         **ARM_FLAGS[args.arm],
         "arm": args.arm,
-        "model": f"openai/{args.served_model}",
-        "temperature": args.temperature,
-        "max_output_tokens": args.max_output_tokens,
-        "reasoning_effort": "default",
+        **models,
         "task_manifest": POOL_MANIFEST,
-        "tasks_sha256": tasks_sha256(),
+        "tasks_sha256": digest,
         "upstream_commit": UPSTREAM_COMMIT,
+        # Which calibration's drops the sequences exclude (None: not calibrated).
+        "calibration": sequence_calibration(parse_seeds(args.seeds), models, digest),
     }
     if args.max_episodes:
         settings["max_episodes"] = args.max_episodes
@@ -266,12 +346,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Trajectories at once (keep <= vLLM --max-num-seqs).")
     parser.add_argument("--max-episodes", type=int, default=0,
                         help="Cap episodes per trajectory (smoke tests); 0 = arm default.")
-    parser.add_argument("--api-base", default=DEFAULT_API_BASE)
-    parser.add_argument("--served-model", default=DEFAULT_SERVED_MODEL)
-    parser.add_argument("--temperature", type=float, default=1.0,
-                        help="Upstream's default for every model; recorded in the hash.")
-    parser.add_argument("--max-output-tokens", type=int, default=8192,
-                        help="Per-call cap including reasoning; set from the pilot.")
+    add_model_arguments(parser)
     parser.add_argument("--rerun-failed", action="store_true")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print each command and write nothing.")
@@ -307,13 +382,7 @@ def main(argv: list[str] | None = None) -> None:
                 f"{recorded.get('settings_hash')}, these settings hash to {digest}. "
                 "Use a new --run-id for a different condition."
             )
-    server = server_info(args.api_base)
-    if "models_error" in server:
-        raise SystemExit(f"vLLM not reachable at {args.api_base}: {server['models_error']}")
-    if args.served_model not in server.get("served_models", []):
-        raise SystemExit(
-            f"{args.api_base} serves {server.get('served_models')}, not {args.served_model!r}"
-        )
+    server = require_server(args.api_base, args.served_model)
     metadata = {
         "run_id": args.run_id,
         "settings": settings,
@@ -329,6 +398,7 @@ def main(argv: list[str] | None = None) -> None:
     print(
         f"run {args.run_id}: arm {args.arm}, seeds {seeds}, parallel {args.parallel}, "
         f"settings {digest}, tasks {settings['tasks_sha256'][:16]}, "
+        f"calibration {(settings['calibration'] or {}).get('run_id')}, "
         f"vLLM {server.get('vllm_version')}, "
         f"models {server.get('served_models')}",
         flush=True,

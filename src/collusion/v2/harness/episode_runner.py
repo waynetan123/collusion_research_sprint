@@ -1118,3 +1118,84 @@ def run_one_episode(
             "verdict": config.controlled_bob_verdict,
         }
     return result
+
+
+def run_solo_task_phase(
+    *,
+    task: dict[str, Any],
+    agent_config: AgentConfig,
+    repo_root: Path,
+    config: EpisodeRunConfig,
+    agent_id: str = AGENT_IDS[0],
+) -> dict[str, Any]:
+    """Run one agent's task phase alone, as in the first episode of a game, and grade it.
+
+    Calibration entry point (v2 addition, never called by the game). It reuses the
+    game's own code path: the same system prompt, task opening, turn budget, forced
+    tool use, per-call seeds and grading, with no peer, communication or verdict.
+    """
+    from collusion.v2.harness.memory.messages import snapshot_visible_messages
+    from collusion.v2.harness.protocol.messaging import _format_private_raw_log
+
+    task_type = task_type_of(task)
+    state = create_channel_state(
+        episode_id=str(task["task_id"]),
+        throttled=config.throttled,
+        char_limit=config.char_limit,
+    )
+    state.update({"repo_root": str(repo_root), "task_type": task_type})
+    prepared = _prepare_agent_task(
+        agent_id=agent_id,
+        task=task,
+        task_type=task_type,
+        state=state,
+        repo_root=repo_root,
+        config=config,
+    )
+    messages = initial_agent_messages(
+        agent_id=agent_id,
+        max_rounds=config.max_rounds,
+        reward_objective=config.reward,
+        reward_scheme=config.reward_scheme,
+        task_attempts=config.task_attempts,
+    )
+    _open_episode(messages, prepared.own_task_prompt)
+    opening_length = len(messages)
+    runtime = AgentRuntime(agent_id=agent_id, config=agent_config, messages=messages)
+    reasoning_traces: list[dict[str, Any]] = []
+    usage_records: list[dict[str, Any]] = []
+    set_phase(state, "task")
+    completed = _run_agent_attempts(
+        runtime=runtime,
+        state=state,
+        phase="task",
+        tool_choice="required",
+        episode_id=str(state["episode_id"]),
+        round_index=None,
+        reasoning_traces=reasoning_traces,
+        usage_records=usage_records,
+        config=config,
+    )
+    slot = agent_state(state, agent_id)
+    raw_log = _format_private_raw_log(slot)
+    turns = sum(
+        1 for message in messages[opening_length:] if message.get("role") == "assistant"
+    )
+    evaluation = evaluate_saved_artifact(
+        task=task, task_type=task_type, slot=slot, repo_root=repo_root
+    )
+    return {
+        "agent_id": agent_id,
+        "completed": completed,
+        "turns": turns,
+        "evaluation": evaluation.code,
+        "expected_verdict": evaluation.expected_verdict,
+        "code_assessment": deepcopy(slot.get("code_assessment")),
+        "raw_log_chars": len(raw_log),
+        "raw_log_retrieved": bool(slot.get("private_raw_log_retrieved")),
+        "private_raw_log": deepcopy(slot.get("private_raw_log", [])),
+        "messages": snapshot_visible_messages(messages),
+        "llm_reasoning_traces": reasoning_traces,
+        "llm_usage": usage_records,
+        "context_prunes": list(state.get("context_prunes", [])),
+    }
