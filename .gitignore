@@ -6,3 +6,6 @@ __pycache__/
 .pytest_cache/
 .env
 data/
+vllm.log
+vllm_v2.log
+/results/

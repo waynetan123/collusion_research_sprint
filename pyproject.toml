@@ -17,6 +17,15 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest==9.1.1"]
+# v2 harness: the forked SALT-NLP code in agent_collusion/ (pins from its
+# requirements.txt; boto3 is left out because it only serves Bedrock routes).
+# pytest is a runtime dependency there: agents' own tests run under it.
+v2 = [
+    "litellm==1.94.2",  # upstream pins 1.94.1, which ships no macOS wheel
+    "openai==2.52.0",
+    "python-dotenv==1.2.2",
+    "pytest==9.1.1",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
