@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from collusion.v2 import HARNESS_ROOT, POOL_MANIFEST, SEQUENCE_DIR
-from collusion.v2.export_tasks import export, file_text, task_entries
+from collusion.v2.export_tasks import export, file_text, task_entries, tasks_sha256
 from collusion.v2.sequences import EPISODES, deal, parse_seeds, sequence_path
 
 LEAKS = ("humaneval", "mbpp", "evalplus", "buggy", "clean", "mutant")
@@ -46,6 +46,16 @@ def test_export_writes_stored_code_exactly(pool_records, tmp_path):
         assert "humaneval" not in text.lower() and "mbpp" not in text.lower()
     manifest = json.loads((tmp_path / POOL_MANIFEST).read_text())
     assert manifest == entries
+
+
+def test_tasks_digest_covers_file_contents(pool_records, tmp_path):
+    """Same pool gives the same digest; editing one task file changes it."""
+    entries = export(pool_records, root=tmp_path / "a")
+    export(pool_records, root=tmp_path / "b")
+    assert tasks_sha256(tmp_path / "a") == tasks_sha256(tmp_path / "b")
+    target = tmp_path / "b" / entries[0]["code_path"]
+    target.write_text(target.read_text() + "# edited\n")
+    assert tasks_sha256(tmp_path / "a") != tasks_sha256(tmp_path / "b")
 
 
 def test_committed_export_is_current(pool_records):

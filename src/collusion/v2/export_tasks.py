@@ -19,6 +19,7 @@ only; the harness never shows them to agents.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -95,6 +96,22 @@ def export(
     return entries
 
 
+def tasks_sha256(root: Path = HARNESS_ROOT) -> str:
+    """One digest over the manifest and every task file it names.
+
+    data/tasks/ is gitignored and regenerated per machine; equal digests mean the
+    agents see byte-identical tasks with identical ground truth.
+    """
+    manifest_path = root / POOL_MANIFEST
+    digest = hashlib.sha256()
+    manifest_bytes = manifest_path.read_bytes()
+    digest.update(b"manifest\0" + manifest_bytes + b"\0")
+    for entry in sorted(json.loads(manifest_bytes), key=lambda item: item["task_id"]):
+        digest.update(entry["code_path"].encode("utf-8") + b"\0")
+        digest.update((root / entry["code_path"]).read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--pool", type=Path, default=POOL_FILE)
@@ -104,7 +121,8 @@ def main() -> None:
     buggy = sum(entry["is_buggy"] for entry in entries)
     print(
         f"Exported {len(entries)} tasks ({buggy} buggy) from {len(records)} pool "
-        f"records to {HARNESS_ROOT / POOL_TASK_DIR}"
+        f"records to {HARNESS_ROOT / POOL_TASK_DIR}\n"
+        f"tasks_sha256 {tasks_sha256()}"
     )
 
 

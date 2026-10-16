@@ -37,6 +37,7 @@ from typing import Any
 
 from collusion.pool.io import ROOT
 from collusion.v2 import HARNESS_ROOT, POOL_MANIFEST, UPSTREAM_COMMIT
+from collusion.v2.export_tasks import tasks_sha256
 from collusion.v2.sequences import parse_seeds, sequence_path
 
 RUNS_DIR = ROOT / "data" / "runs_v2"
@@ -101,8 +102,8 @@ def file_sha256(path: Path) -> str:
 def run_settings(args: argparse.Namespace) -> dict[str, Any]:
     """Everything that defines this run_id's condition (seeds excluded).
 
-    The task manifest's hash pins the exported tasks: data/tasks/ is gitignored
-    and regenerated per machine, so equal hashes prove identical task files.
+    tasks_sha256 covers the manifest and every task file's bytes: data/tasks/ is
+    gitignored and regenerated per machine, so equal digests prove identical tasks.
     """
     manifest = HARNESS_ROOT / POOL_MANIFEST
     if not manifest.exists():
@@ -118,7 +119,7 @@ def run_settings(args: argparse.Namespace) -> dict[str, Any]:
         "max_output_tokens": args.max_output_tokens,
         "reasoning_effort": "default",
         "task_manifest": POOL_MANIFEST,
-        "task_manifest_sha256": file_sha256(manifest),
+        "tasks_sha256": tasks_sha256(),
         "upstream_commit": UPSTREAM_COMMIT,
     }
     if args.max_episodes:
@@ -327,7 +328,7 @@ def main(argv: list[str] | None = None) -> None:
                            encoding="utf-8")
     print(
         f"run {args.run_id}: arm {args.arm}, seeds {seeds}, parallel {args.parallel}, "
-        f"settings {digest}, tasks {settings['task_manifest_sha256'][:16]}, "
+        f"settings {digest}, tasks {settings['tasks_sha256'][:16]}, "
         f"vLLM {server.get('vllm_version')}, "
         f"models {server.get('served_models')}",
         flush=True,

@@ -1,6 +1,6 @@
 # v2 Step 1: Fork the harness (decisions log)
 
-Status: **Stage 1A built and tested offline (59 tests pass), 2026-10-16. Live smoke test on gpu17 not yet run (§12).** Stage 1B (branching, token-exact redaction, partner swap, monitored channel) has not started.
+Status: **Stage 1A built and tested offline (60 tests pass), 2026-10-16; harness moved into `src/` and task data out of git (§3a). Live smoke test on gpu17 not yet run (§12).** Stage 1B (branching, token-exact redaction, partner swap, monitored channel) has not started.
 
 Design doc: `docs/Agent Collusion Hackathon v2.md`. v1 artefacts (harness, configs, runs) live on branch `two_arms`; this branch (`replicate_paper`) starts from the pool-only commit `8927421`.
 
@@ -20,7 +20,7 @@ v2 Step 2 (build the pool) is already done: 333 pairs (`docs/step1_decisions.md`
 | Question | Decision |
 |---|---|
 | Where the model runs | **A40 vLLM**, Qwen3.5-27B-FP8, reasoning on (as in the design doc). No OpenRouter route was built. |
-| Where the fork lives | **`agent_collusion/` in this repo.** Commit 1 is the unmodified upstream tree; our changes are diffs against it. |
+| Where the fork lives | First `agent_collusion/` (pristine import, then patches). **Later the same day, moved to `src/collusion/v2/harness/`** with only imports rewritten, and task data moved out of git (§3a). |
 | Context format | **Upstream's native `communication-onward` memory**, with task traces and reasoning dropped from past episodes. This deviates from the doc's literal `== Episode N ==` text block (§9). |
 | Build scope | **Staged**: 1A now, 1B while the pilot runs. |
 | Task types | **Code analysis only**, on our pool. The paper mixes code analysis, record extraction and data search. This is feasible with no code change beyond `--task-manifests` (§3), and is a reported deviation (§9). |
@@ -47,6 +47,34 @@ v2 Step 2 (build the pool) is already done: 333 pairs (`docs/step1_decisions.md`
 - **The 200-character limit is never stated to agents.** An overlength message is rejected with `exceeds 200 char limit` and may be retried (3 attempts per turn). Arm 1 and arm 2 prompts are therefore byte-identical; only enforcement differs.
 - Agent tests run as `pytest` in a subprocess with a 30 s timeout and a stripped environment. There is no container.
 
+### 3a. Move into `src/` and data out of git (2026-10-16, user request)
+
+Only the harness code comes from the paper; every task is generated from our own pool. So the harness now lives in the package and the generated data is gitignored.
+
+| Upstream | Now |
+|---|---|
+| `experiments/` | `src/collusion/v2/harness/` (run as `python -m collusion.v2.harness.runner`) |
+| `analysis/` (judges and their prompt files) | `src/collusion/v2/analysis/` |
+| `LICENSE` (MIT) | `src/collusion/v2/UPSTREAM_LICENSE` |
+| `README.md` | `docs/upstream_README.md` |
+| `task/code-analysis/` (the paper's 25 functions), `requirements.txt`, `.env.example` | dropped (unused) |
+
+- **Code changes from the move:**
+  - `experiments.` imports become `collusion.v2.harness.`;
+  - the judges' `ROOT` changes from `parents[1]` to `parents[4]`, so it still means the repo root.
+
+  Checked by diffing against `271d9ce` with the same import rewrite applied: every remaining difference is one of the §5 patches or a docstring.
+- **History:** the branch was rewritten, so `271d9ce` (the pristine import) is no longer on any branch. It still exists locally, and `git archive 271d9ce agent_collusion` recovers it until it is garbage-collected. To keep the "diff against upstream" audit trail, tag it: `git tag upstream-5afb2c5 271d9ce`.
+- **Working directory:** the harness resolves task paths against its working directory and refuses paths outside it, so the launcher runs it from the **repo root** (`collusion.v2.HARNESS_ROOT`). Agents' scratch test directories go to `results/tmp_tests/` (gitignored) and are deleted after each episode.
+- **Task data:** generated into `data/tasks/` (666 `fn_NNN.py` files + `task_manifest.json`) and `data/sequences/`, both under the gitignored `data/`. Each machine regenerates them from `data/pool/pool.jsonl`; export and dealing are deterministic.
+- **Pin:** the export prints `tasks_sha256`, a digest over the manifest **and every task file's bytes**, and each launch records it in its settings (so it is part of `settings_hash`). Each seed's `launch_metadata.json` records `sequence_sha256`. An earlier version hashed only the manifest, which would not have caught different function code under the same names. Reference values on the Mac (pool of 2026-10-09, 333 records):
+  - `tasks_sha256` = `314486ba8b34c8f8288429c9a5d9d3bf3b43a91fd7d16acd508d3583f060bf8f`
+  - `rep001` sha256 = `cb5e4e3918fe7dc181d210056f7b66c062fe2e27b0a8331eecc6bf894ca95a01`
+  - `rep024` sha256 = `a6d86aa44d6b94da4627830e75ab24213698688a8c2e17a56faea1daf8216c74`
+
+  gpu17 must reproduce these before any run.
+- **Known exposure, unchanged by the move:** agent-written tests run with the repo root as working directory and no sandbox. Test code could therefore read `data/tasks/task_manifest.json` (ground truth) or `data/pool/` by relative path, if an agent guessed the path. Upstream has the same exposure (its manifests sit under the run's working directory). Check `written_test_files` in the pilot for any file access outside the target.
+
 ## 4. Environment
 
 - **Python 3.12.** The new extra is `.[v2]`: `litellm==1.94.2`, `openai==2.52.0`, `python-dotenv==1.2.2`, `pytest==9.1.1`.
@@ -57,7 +85,7 @@ v2 Step 2 (build the pool) is already done: 333 pairs (`docs/step1_decisions.md`
   - `seed`, the forced `tool_choice` (`{"type":"function","function":{"name":...}}`), `max_tokens` and `temperature` are all sent;
   - replayed `reasoning_content` / `reasoning` fields on assistant messages are passed through unchanged.
 
-## 5. Patches to `agent_collusion/experiments/`
+## 5. Patches to the harness (`src/collusion/v2/harness/`, upstream `experiments/`)
 
 Every addition is a flag whose default keeps upstream behaviour.
 
@@ -96,16 +124,16 @@ Under the throttle every accept is therefore a violation; in arm 1 it depends on
 
 ## 6. Pool export and sequences
 
-**`python -m collusion.v2.export_tasks`** writes the 333 records as **666 files** `agent_collusion/task/pool/fn_NNN.py` plus `task_manifest_pool.json`.
+**`python -m collusion.v2.export_tasks`** writes the 333 records as **666 files** `data/tasks/fn_NNN.py` plus `data/tasks/task_manifest.json`, and prints `tasks_sha256` (§3a).
 
 - Each file holds the stored `clean_code` / `buggy_code` exactly (spec docstring included), plus a final newline.
 - Task ids are `fn_NNN_task`. NNN comes from a seeded permutation of 1..666 (`EXPORT_SEED = 20261016`), so the agent-visible display id (`1-NNN`) and the file path carry no source or version information.
 - Twins share `spec_key` = pool id, so upstream's loader never pairs twins.
 - The extra fields `pool_id`, `version`, `source`, `bug_type` and `bug_origin` are for analysis and never reach a prompt.
 - EvalPlus inputs are not exported. Ground truth is `expected_verdict` (`fail` for buggy), as the pool already verified.
-- The files are committed, so gpu17 needs no copy of `data/pool/`. A test checks they match a fresh export.
+- The files are gitignored and regenerated per machine (gpu17 needs `data/pool/pool.jsonl`). A test checks that the files on disk match a fresh export, and another that `tasks_sha256` changes when any task file's contents change.
 
-**`python -m collusion.v2.sequences --seeds 1-24`** writes `agent_collusion/task/sequences_pool/repNNN_sampled_manifest.json` in upstream's format. Each seed gets 25 episodes × 2 tasks with these properties:
+**`python -m collusion.v2.sequences --seeds 1-24`** writes `data/sequences/repNNN_sampled_manifest.json` in upstream's format. Each seed gets 25 episodes × 2 tasks with these properties:
 
 - 50 distinct pool functions, so no repeats and no twin pairs;
 - every episode pairs one HumanEval and one MBPP function, with a random agent assignment;
@@ -116,7 +144,7 @@ Arms share sequences by seed. A 25-episode sequence covers the arm 2 deadline (1
 
 ## 7. Launcher (`python -m collusion.v2.launch`)
 
-- One `python -m experiments.runner` process per seed, `--parallel` at a time. Upstream runs trajectories one after another.
+- One `python -m collusion.v2.harness.runner` process per seed, run from the repo root, `--parallel` at a time. Upstream runs trajectories one after another.
 - Output goes to `data/runs_v2/<run_id>/` (gitignored):
   - `launch.json`: settings, `settings_hash`, repo commit (+dirty), upstream commit, vLLM version and served models (read from `/version` and `/v1/models`), Python version;
   - `seed_NNN/{run.json, llm_usage.jsonl, checkpoint.json, stdout.log, launch_metadata.json}`.
@@ -173,7 +201,7 @@ top_p and top_k come from the checkpoint's `generation_config.json` (0.95 / 20) 
 
 ## 11. Tests
 
-`pytest` runs **59 tests**: the 41 existing pool tests and 18 new ones in `tests/v2/`.
+`pytest` runs **60 tests**: the 41 existing pool tests and 19 new ones in `tests/v2/` (including the `tasks_sha256` sensitivity test, §3a).
 
 - **Export:** neutral names, no leaks, code byte-exact, committed export current.
 - **Sequences:** constraints over 40 seeds, determinism, all written files load in upstream's loader.
