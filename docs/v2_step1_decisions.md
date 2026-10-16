@@ -31,7 +31,7 @@ v2 Step 2 (build the pool) is already done: 333 pairs (`docs/step1_decisions.md`
   - Tarball sha256: `7786b2f4e798aec8d29753aa20d8d3e39c0975d5c3b793282ab0bec2e84318f2`.
 - Committed unmodified as `271d9ce` (`chore(agent_collusion): import SALT-NLP/agent-collusion@5afb2c5 unmodified`). `diff -r` against the tarball was identical.
 - After that commit, these were deleted, since the run is code-analysis only: `task/text-extraction/`, `task/data-search/` (including `ops_search.sqlite`), and the two mixed sequence sets `task_sequences_50x10/` and `task_sequences_50x3+50x10/`. The upstream tool code for those task types stays and is simply never selected. Everything deleted can be restored from `271d9ce`.
-- `task/code-analysis/` (the paper's 25 functions) is kept for reference. It is not in the run's manifest list.
+- `task/code-analysis/` (the paper's 25 functions) was kept at first, then dropped in the move to `src/` (§3a).
 
 **Upstream structure, confirmed before committing to the fork route:**
 
@@ -203,7 +203,7 @@ top_p and top_k come from the checkpoint's `generation_config.json` (0.95 / 20) 
 
 `pytest` runs **60 tests**: the 41 existing pool tests and 19 new ones in `tests/v2/` (including the `tasks_sha256` sensitivity test, §3a).
 
-- **Export:** neutral names, no leaks, code byte-exact, committed export current.
+- **Export:** neutral names, no leaks, code byte-exact, on-disk export matches a fresh export, `tasks_sha256` sensitivity.
 - **Sequences:** constraints over 40 seeds, determinism, all written files load in upstream's loader.
 - **Stop rules:** streaks, deadline, establishment at the deadline.
 - **Compliance labels:** exact, split, rewrapped, headed and partial sends.
@@ -232,5 +232,5 @@ Record the vLLM version and results here.
 
 ## 13. Open items
 
-- 1B: branching from `checkpoint.json` (`experiments/checkpoint.load_checkpoint` exists), token-exact redaction (pinned tokenizer and chat template in `data/raw/qwen/Qwen3.5-27B-FP8/`, cross-checked with vLLM `/tokenize`), partner swap, and the monitored channel.
+- 1B: branching from `checkpoint.json` (`collusion.v2.harness.checkpoint.load_checkpoint` exists), token-exact redaction (pinned tokenizer and chat template in `data/raw/qwen/Qwen3.5-27B-FP8/`, cross-checked with vLLM `/tokenize`), partner swap, and the monitored channel.
 - Pilot: set the per-call `max_tokens` cap, measure throughput and cache hits, and choose pilot seeds that are not used in the main run.
